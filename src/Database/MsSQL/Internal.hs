@@ -214,7 +214,7 @@ disconnect con = do
     False -> do
       dbErrs <- getErrors ret (SQLDBCRef hdbc)
       envErrs <- getErrors ret (SQLENVRef henv)
-      pure $ Left (dbErrs ++ envErrs)
+      pure $ Left (dbErrs <> envErrs)
   where
     hdbc = _hdbc con
     henv = _henv con
@@ -305,7 +305,7 @@ getMessages handleRef = do
 getErrors :: ResIndicator -> HandleRef -> IO SQLErrors
 getErrors res handleRef = do
   msgE <- getMessages handleRef
-  pure $ case msgE of
+  pure $ SQLErrors $ case msgE of
     Left es -> [es]
     Right msgs -> fmap (\(msg, st) -> SQLError
                                       { sqlState = st
@@ -581,8 +581,11 @@ getColPos hstmt = do
 type Query = T.Text
 
 query :: forall r.(FromRow r, SQLBindCol (RowBufferType r)) => Connection -> Query -> IO (Either SQLErrors (Vector r))
-query con q = do
-  let rowPFun = (getValue $ runRowParser fromRow)
+query = queryWith fromRow 
+
+queryWith :: forall r.(SQLBindCol (RowBufferType r)) => RowParser (RowBufferType r) r -> Connection -> Query -> IO (Either SQLErrors (Vector r))
+queryWith rp con q = do
+  let rowPFun = (getValue $ runRowParser rp)
   withHSTMT con $ \hstmt -> do
     resE <- sqldirect con (getHSTMT hstmt) q
     case resE of
@@ -685,6 +688,10 @@ class FromField t where
 instance FromField Int where
   type FieldBufferType Int = CBigInt
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
+
+instance (FromField a) => FromField (Identity a) where
+  type FieldBufferType (Identity a) = FieldBufferType a
+  fromField = (fmap . fmap) Identity fromField
 
 {-
 instance FromField Int8 where
@@ -844,7 +851,7 @@ instance SQLBindCol (ColBuffer CChar) where
             case isSuccessful ret of
               True -> pure $ Right (ColBuffer chrFP lenOrIndFP)
               False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
         
 instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt = do
@@ -868,7 +875,7 @@ instance SQLBindCol (ColBuffer CWchar) where
             case isSuccessful ret of
               True -> pure $ Right (ColBuffer txtFP lenOrIndFP)
               False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
 
 newtype CText = CText CWchar
   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -895,7 +902,7 @@ instance SQLBindCol (ColBuffer CText) where
             case isSuccessful ret of
               True -> pure $ Right (ColBuffer (coerce txtFP) lenOrIndFP)
               False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
         
 
 newtype CUTinyInt = CUTinyInt CUChar
@@ -923,7 +930,7 @@ instance SQLBindCol (ColBuffer CUTinyInt) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
         
 newtype CTinyInt = CTinyInt CChar
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -950,7 +957,7 @@ instance SQLBindCol (ColBuffer CTinyInt) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CLong) where
   sqlBindCol hstmt = do
@@ -974,7 +981,7 @@ instance SQLBindCol (ColBuffer CLong) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer intFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
         
 instance SQLBindCol (ColBuffer CULong) where
   sqlBindCol hstmt = do
@@ -998,7 +1005,7 @@ instance SQLBindCol (ColBuffer CULong) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer intFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left [] 
+       | otherwise -> pure $ Left mempty
         
 newtype CSmallInt = CSmallInt CShort
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1025,7 +1032,7 @@ instance SQLBindCol (ColBuffer CSmallInt) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce shortFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 newtype CUSmallInt = CUSmallInt CShort
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1052,7 +1059,7 @@ instance SQLBindCol (ColBuffer CUSmallInt) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce shortFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CFloat) where
   sqlBindCol hstmt = do
@@ -1076,7 +1083,7 @@ instance SQLBindCol (ColBuffer CFloat) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer floatFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CDouble) where
   sqlBindCol hstmt = do
@@ -1100,7 +1107,7 @@ instance SQLBindCol (ColBuffer CDouble) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer floatFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CBool) where
   sqlBindCol hstmt = do
@@ -1124,7 +1131,7 @@ instance SQLBindCol (ColBuffer CBool) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CDate) where
   sqlBindCol hstmt = do
@@ -1148,7 +1155,7 @@ instance SQLBindCol (ColBuffer CDate) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (dateFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []        
+       | otherwise -> pure $ Left mempty
 
 
 newtype CBigInt = CBigInt CLLong
@@ -1176,7 +1183,7 @@ instance SQLBindCol (ColBuffer CBigInt) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce llongFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
         
 newtype CUBigInt = CUBigInt CULLong
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1203,7 +1210,7 @@ instance SQLBindCol (ColBuffer CUBigInt) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce llongFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CTimeOfDay) where
   sqlBindCol hstmt = do
@@ -1227,7 +1234,7 @@ instance SQLBindCol (ColBuffer CTimeOfDay) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (todFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
         
 instance SQLBindCol (ColBuffer CLocalTime) where
   sqlBindCol hstmt = do
@@ -1251,7 +1258,7 @@ instance SQLBindCol (ColBuffer CLocalTime) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (ltimeFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance SQLBindCol (ColBuffer CZonedTime) where
   sqlBindCol hstmt = do
@@ -1275,7 +1282,7 @@ instance SQLBindCol (ColBuffer CZonedTime) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (ltimeFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
         
 instance SQLBindCol (ColBuffer UUID) where
   sqlBindCol hstmt = do
@@ -1299,7 +1306,7 @@ instance SQLBindCol (ColBuffer UUID) where
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (uuidFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left []
+       | otherwise -> pure $ Left mempty
 
 instance (SQLBindCol a, SQLBindCol b) => SQLBindCol (a, b) where
   sqlBindCol hstmt = do
