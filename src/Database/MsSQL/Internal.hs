@@ -85,17 +85,6 @@ odbcSQLServer17 = OdbcSQLServer 17
 odbcSQLServer12 :: OdbcDriver
 odbcSQLServer12 = OdbcSQLServer 12
 
-{-
-  { database :: T.Text
-  , server :: T.Text
-  , password :: T.Text
-  , user :: T.Text
-  , port :: Word16
-  , odbcDriver :: OdbcDriver
-  , connectProperties :: HM.HashMap Text Text
-  } deriving (Show, Eq)
--}
-
 ppOdbcDriver :: OdbcDriver -> T.Text
 ppOdbcDriver dv = case dv of
   OdbcSQLServer v   -> "Driver={ODBC Driver " <> T.pack (show v) <> " for SQL Server};"
