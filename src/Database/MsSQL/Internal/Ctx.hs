@@ -1,4 +1,5 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Database.MsSQL.Internal.Ctx where
 
@@ -7,7 +8,9 @@ import qualified Language.C.Inline as C
 import qualified Language.C.Types as C
 import Language.C.Inline.Context (ctxTypesTable)
 import Language.Haskell.TH
+#if __GLASGOW_HASKELL__ < 802
 import Data.Monoid
+#endif
 
 
 mssqlCtx :: [(C.CIdentifier, TypeQ)] -> C.Context

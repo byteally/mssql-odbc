@@ -3,9 +3,7 @@ module Database.MsSQL.Internal.SQLTypes where
 
 import Foreign.C.Types
 import Foreign.Storable
-import Data.Word
 import Data.Time
-import Data.Fixed
 
 #ifdef mingw32_HOST_OS
 C.include "<windows.h>"

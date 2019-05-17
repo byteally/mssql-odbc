@@ -17,6 +17,9 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns #-}
+
 module Database.MsSQL.Internal
   ( module Database.MsSQL.Internal.SQLError
   , module Database.MsSQL.Internal
@@ -55,21 +58,95 @@ import Data.UUID.Types
 import Database.MsSQL.Internal.SQLTypes
 import Data.Functor.Identity
 import Control.Monad
-import Data.Semigroup
 import Control.Monad.Reader.Class
+import Data.String
+import qualified Data.HashMap.Strict as HM
+#if __GLASGOW_HASKELL__ < 802
+import Data.Semigroup
+#endif
+
+data ConnectParams = ConnectParams
+                     T.Text
+                     T.Text
+                     T.Text
+                     T.Text
+                     Word16
+                     OdbcDriver
+                     Properties
+                     deriving Show
+
+data OdbcDriver = OdbcSQLServer Word8
+                | OtherOdbcDriver T.Text
+                deriving Show
+
+odbcSQLServer17 :: OdbcDriver
+odbcSQLServer17 = OdbcSQLServer 17
+
+odbcSQLServer12 :: OdbcDriver
+odbcSQLServer12 = OdbcSQLServer 12
+
+{-
+  { database :: T.Text
+  , server :: T.Text
+  , password :: T.Text
+  , user :: T.Text
+  , port :: Word16
+  , odbcDriver :: OdbcDriver
+  , connectProperties :: HM.HashMap Text Text
+  } deriving (Show, Eq)
+-}
+
+ppOdbcDriver :: OdbcDriver -> T.Text
+ppOdbcDriver dv = case dv of
+  OdbcSQLServer v   -> "Driver={ODBC Driver " <> T.pack (show v) <> " for SQL Server};"
+  OtherOdbcDriver t -> "Driver=" <> t <> ";"
+
+ppConnectionString :: ConnectionString -> T.Text
+ppConnectionString (ConnectionString' (Left str)) = str
+ppConnectionString (ConnectionString' (Right (ConnectParams db ser pass usr pt dv cp))) =
+  let ppDriver    = ppOdbcDriver dv
+      ppServer    = ser
+      ppDb        = db
+      ppPass      = pass
+      ppUser      = usr
+      ppPort      = tshow pt
+      
+  in ppDriver <>
+     "Server=" <> ppServer <> "," <> ppPort <> ";" <>
+     "Database=" <> ppDb <> ";" <>
+     "UID="<> ppUser <>";PWD=" <> ppPass <>";" <>
+     ppProps cp
+
+  where tshow = T.pack . show
+        ppProps = HM.foldlWithKey' (\k v ac -> k <> "=" <> v <> ";" <> ac) "" 
+
+
+newtype ConnectionString = ConnectionString' { getConString :: Either T.Text ConnectParams }
+                         deriving (Show)
+
+type Properties = HM.HashMap T.Text T.Text
+
+defProperties :: Properties
+defProperties = HM.empty
+
+pattern ConnectionString :: T.Text -> T.Text -> Word16 -> T.Text -> T.Text -> OdbcDriver -> Properties -> ConnectionString
+pattern ConnectionString { database, server, port, user, password, odbcDriver, connectProperties } =
+  ConnectionString' (Right (ConnectParams database server password user port odbcDriver connectProperties))
+  
+instance IsString ConnectionString where
+  fromString = ConnectionString' . Left . T.pack
 
 data ConnectInfo = ConnectInfo
-  { connectionString :: T.Text
+  { connectionString :: ConnectionString
   , autoCommit :: Bool
   , ansi :: Bool
   , timeout :: Int
   , readOnly :: Bool
   , attrBefore :: SV.Vector ConnectAttr
-  } deriving (Show, Eq)
+  } deriving Show
 
 newtype ConnectAttr = ConnectAttr { getConnectAttr :: C.CInt}
                           deriving (Show, Read, Eq, Storable)
-
 
 data SQLHENV
 data SQLHDBC
@@ -119,7 +196,7 @@ C.include "<sqltypes.h>"
 C.include "<sqlucode.h>"
 C.include "<msodbcsql.h>"
 
-connectInfo :: T.Text -> ConnectInfo
+connectInfo :: ConnectionString -> ConnectInfo
 connectInfo conStr = ConnectInfo
   { connectionString = conStr
   , autoCommit = True
@@ -148,7 +225,8 @@ connect connInfo = do
       doConnect henvp hdbcp
   where
     doConnect henvp hdbcp = do
-      (ctxt, i16) <- asForeignPtr $ connectionString connInfo
+      (ctxt, i16) <- asForeignPtr $
+        ppConnectionString (connectionString connInfo)
       let ctxtLen = fromIntegral i16 :: C.CInt
 
       ret <- ResIndicator <$> [C.block| int {
@@ -186,13 +264,10 @@ connect connInfo = do
 disconnect :: Connection -> IO (Either SQLErrors ())
 disconnect con = do
   ret <- ResIndicator <$> [C.block| int {
-    SQLRETURN ret;
+    SQLRETURN ret = 0;
     SQLHENV henv = $(SQLHENV henv);
     SQLHDBC hdbc = $(SQLHDBC hdbc);
 
-    SQLWCHAR eMSG [SQL_MAX_MESSAGE_LENGTH];
-    SQLSMALLINT eMSGLen;
-    
     if (hdbc != SQL_NULL_HDBC) {
       ret = SQLDisconnect(hdbc);
       if (!SQL_SUCCEEDED(ret)) return ret;
@@ -206,6 +281,7 @@ disconnect con = do
       ret = SQLFreeHandle(SQL_HANDLE_ENV, henv);
       if (!SQL_SUCCEEDED(ret)) return ret;
     }
+    return ret;
 
   }|]
 
@@ -258,7 +334,7 @@ getMessages handleRef = do
       SQLSTMTRef h -> (SQL_HANDLE_STMT, castPtr h, "STATEMENT")
   ret <- [C.block| int {
              SQLRETURN ret = 0;
-             SQLINTEGER i = 0;
+             SQLSMALLINT i = 0;
              SQLWCHAR eState [6]; 
              SQLWCHAR eMSG [SQL_MAX_MESSAGE_LENGTH];
              SQLSMALLINT eMSGLen;
@@ -314,14 +390,12 @@ getErrors res handleRef = do
                                       }) msgs
 
 sqldirect :: Connection -> Ptr SQLHSTMT -> T.Text -> IO (Either SQLErrors ())
-sqldirect con hstmt sql = do
+sqldirect _con hstmt sql = do
   (queryWStr, queryLen) <- fmap (fmap fromIntegral) $ asForeignPtr $ sql
   numResultColsFP :: ForeignPtr CShort <- mallocForeignPtr
 
   ret <- ResIndicator <$> [C.block| int {
     SQLRETURN ret = 0;
-    SQLHENV henv = $(SQLHENV henv);
-    SQLHDBC hdbc = $(SQLHDBC hdbc);
     SQLHSTMT hstmt = $(SQLHSTMT hstmt);
     SQLSMALLINT* numColumnPtr = $fptr-ptr:(SQLSMALLINT* numResultColsFP);
 
@@ -332,13 +406,10 @@ sqldirect con hstmt sql = do
 
     return ret;
     }|]
-
+  
   case isSuccessful ret of
-    False -> Left <$> getErrors ret (SQLSTMTRef hstmt)
+    False -> Left <$> getErrors ret (SQLSTMTRef hstmt)      
     True -> pure $ Right ()
-  where
-    hdbc = _hdbc con
-    henv = _henv con
         
 allocHSTMT :: Connection -> IO (Either SQLErrors (HSTMT a))
 allocHSTMT con = do
@@ -350,6 +421,7 @@ allocHSTMT con = do
       ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, hstmtp);
       return ret;
     }|]
+
     case isSuccessful ret of
       False -> Left <$> getErrors ret (SQLDBCRef hdbc)
       True -> do
@@ -473,7 +545,9 @@ sqlDescribeCol hstmt colPos' = do
                           SQLWCHAR* tabNameP = $(SQLWCHAR* tabNameP);
                
                           ret = SQLDescribeColW(hstmt, $(SQLUSMALLINT colPos'), tabNameP, 16 * 128, nameLengthP, dataTypeP, colSizeP, decimalDigitsP, nullableP);
+                          return ret;
                       }|]
+
                case isSuccessful ret of
                  False -> Left <$> getErrors ret (SQLSTMTRef hstmt)
                  True -> do
@@ -493,6 +567,9 @@ sqlDescribeCol hstmt colPos' = do
                         SQL_NO_NULLS         -> Just False
                         SQL_NULLABLE         -> Just True
                         SQL_NULLABLE_UNKNOWN -> Nothing
+#if __GLASGOW_HASKELL__ < 820
+                        _                    -> error "Panic: impossible case"
+#endif
                     }
   
 isSuccessful :: ResIndicator -> Bool
@@ -543,6 +620,7 @@ sqlRowCount stmt = do
 
         return ret;
     }|]
+
   case isSuccessful ret of
     True -> (Right . fromIntegral) <$> peekFP rcountFP
     False -> Left <$> getErrors ret (SQLSTMTRef hstmt)
@@ -599,8 +677,12 @@ queryWith rp con q = do
               SQL_SUCCESS           -> pure $ Right rows
               SQL_SUCCESS_WITH_INFO -> pure $ Right rows
               SQL_NO_DATA           -> pure $ Right rows
-              _                     -> Left <$> getErrors ret (SQLSTMTRef $ getHSTMT hstmt)
-          Left e -> pure $ Left e
+              _                     -> do
+                errs <- getErrors ret (SQLSTMTRef $ getHSTMT hstmt)
+
+                pure (Left errs)
+          Left e -> do
+            pure $ Left e
 
 execute :: Connection -> Query -> IO (Either SQLErrors Int64)
 execute con q = do
@@ -848,10 +930,11 @@ instance SQLBindCol (ColBuffer CChar) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrp), bufferLen, lenOrInd);
                 return ret;
               }|]
+
             case isSuccessful ret of
               True -> pure $ Right (ColBuffer chrFP lenOrIndFP)
               False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR] cdesc
         
 instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt = do
@@ -872,10 +955,12 @@ instance SQLBindCol (ColBuffer CWchar) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), 100, lenOrInd);
                 return ret;
               }|]
+
+
             case isSuccessful ret of
               True -> pure $ Right (ColBuffer txtFP lenOrIndFP)
               False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_LONGVARCHAR, SQL_WLONGVARCHAR] cdesc
 
 newtype CText = CText CWchar
   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -899,10 +984,12 @@ instance SQLBindCol (ColBuffer CText) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), 100, lenOrInd);
                 return ret;
               }|]
+
+
             case isSuccessful ret of
               True -> pure $ Right (ColBuffer (coerce txtFP) lenOrIndFP)
               False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WCHAR] cdesc
         
 
 newtype CUTinyInt = CUTinyInt CUChar
@@ -927,10 +1014,12 @@ instance SQLBindCol (ColBuffer CUTinyInt) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_UTINYINT, $(SQLCHAR* chrP), sizeof(SQLCHAR), lenOrInd);
                 return ret;
             }|]
+
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_TINYINT] cdesc
         
 newtype CTinyInt = CTinyInt CChar
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -954,10 +1043,11 @@ instance SQLBindCol (ColBuffer CTinyInt) where
                  ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_TINYINT, $(SQLCHAR* chrP), sizeof(SQLCHAR), lenOrInd);
                  return ret;
              }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_TINYINT] cdesc
 
 instance SQLBindCol (ColBuffer CLong) where
   sqlBindCol hstmt = do
@@ -978,10 +1068,11 @@ instance SQLBindCol (ColBuffer CLong) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_LONG, $(SQLINTEGER* intP), sizeof(SQLINTEGER), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer intFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_INTEGER] cdesc
         
 instance SQLBindCol (ColBuffer CULong) where
   sqlBindCol hstmt = do
@@ -1002,10 +1093,11 @@ instance SQLBindCol (ColBuffer CULong) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_ULONG, $(SQLUINTEGER* intP), sizeof(SQLUINTEGER), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer intFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_INTEGER] cdesc
         
 newtype CSmallInt = CSmallInt CShort
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1029,10 +1121,11 @@ instance SQLBindCol (ColBuffer CSmallInt) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_SHORT, $(SQLSMALLINT* shortP), sizeof(SQLSMALLINT), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce shortFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_SMALLINT] cdesc
 
 newtype CUSmallInt = CUSmallInt CShort
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1056,10 +1149,11 @@ instance SQLBindCol (ColBuffer CUSmallInt) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_USHORT, $(SQLUSMALLINT* shortP), sizeof(SQLUSMALLINT), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce shortFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_SMALLINT] cdesc
 
 instance SQLBindCol (ColBuffer CFloat) where
   sqlBindCol hstmt = do
@@ -1080,10 +1174,11 @@ instance SQLBindCol (ColBuffer CFloat) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_FLOAT, $(SQLREAL* floatP), sizeof(SQLREAL), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer floatFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_REAL] cdesc
 
 instance SQLBindCol (ColBuffer CDouble) where
   sqlBindCol hstmt = do
@@ -1104,10 +1199,11 @@ instance SQLBindCol (ColBuffer CDouble) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_DOUBLE, $(SQLDOUBLE* floatP), sizeof(SQLDOUBLE), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer floatFP lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_FLOAT] cdesc
 
 instance SQLBindCol (ColBuffer CBool) where
   sqlBindCol hstmt = do
@@ -1128,10 +1224,11 @@ instance SQLBindCol (ColBuffer CBool) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_BIT, $(SQLCHAR* chrP), sizeof(1), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_BIT] cdesc
 
 instance SQLBindCol (ColBuffer CDate) where
   sqlBindCol hstmt = do
@@ -1152,10 +1249,12 @@ instance SQLBindCol (ColBuffer CDate) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_TYPE_DATE, $(SQL_DATE_STRUCT* dateP), sizeof(SQL_DATE_STRUCT), lenOrInd);
                 return ret;
             }|]
+
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (dateFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_DATE, SQL_TYPE_DATE] cdesc
 
 
 newtype CBigInt = CBigInt CLLong
@@ -1166,6 +1265,7 @@ instance SQLBindCol (ColBuffer CBigInt) where
    let hstmtP = getHSTMT hstmt
    llongFP <- mallocForeignPtr
    colDescE <- getCurrentColDescriptorAndMove hstmt
+
    case colDescE of
      Left e -> pure $ Left e
      Right cdesc
@@ -1180,10 +1280,11 @@ instance SQLBindCol (ColBuffer CBigInt) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_SBIGINT, $(long long* llongP), sizeof(long long), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce llongFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_BIGINT] cdesc
         
 newtype CUBigInt = CUBigInt CULLong
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1207,10 +1308,11 @@ instance SQLBindCol (ColBuffer CUBigInt) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_UBIGINT, $(unsigned long long* llongP), sizeof(unsigned long long), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (coerce llongFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_BIGINT] cdesc
 
 instance SQLBindCol (ColBuffer CTimeOfDay) where
   sqlBindCol hstmt = do
@@ -1231,10 +1333,11 @@ instance SQLBindCol (ColBuffer CTimeOfDay) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQL_SS_TIME2_STRUCT* todP), sizeof(SQL_SS_TIME2_STRUCT), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (todFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_TIME, SQL_SS_TIME2] cdesc
         
 instance SQLBindCol (ColBuffer CLocalTime) where
   sqlBindCol hstmt = do
@@ -1255,10 +1358,11 @@ instance SQLBindCol (ColBuffer CLocalTime) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_TYPE_TIMESTAMP, $(SQL_TIMESTAMP_STRUCT* ltimeP), sizeof(SQL_TIMESTAMP_STRUCT), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (ltimeFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_TIMESTAMP, SQL_TYPE_TIMESTAMP] cdesc
 
 instance SQLBindCol (ColBuffer CZonedTime) where
   sqlBindCol hstmt = do
@@ -1279,10 +1383,11 @@ instance SQLBindCol (ColBuffer CZonedTime) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQL_SS_TIMESTAMPOFFSET_STRUCT* ltimeP), sizeof(SQL_SS_TIMESTAMPOFFSET_STRUCT), lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (ltimeFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_SS_TIMESTAMPOFFSET] cdesc
         
 instance SQLBindCol (ColBuffer UUID) where
   sqlBindCol hstmt = do
@@ -1303,10 +1408,11 @@ instance SQLBindCol (ColBuffer UUID) where
                 ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_GUID, $(SQLGUID* uuidP), 16, lenOrInd);
                 return ret;
             }|]
+
            case isSuccessful ret of
              True -> pure $ Right (ColBuffer (uuidFP) lenOrIndFP)
              False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-       | otherwise -> pure $ Left mempty
+       | otherwise -> typeMismatch [SQL_GUID] cdesc
 
 instance (SQLBindCol a, SQLBindCol b) => SQLBindCol (a, b) where
   sqlBindCol hstmt = do
@@ -1332,7 +1438,21 @@ instance SQLBindCol (U1 a) where
 instance SQLBindCol a => SQLBindCol (K1 i a t) where
   sqlBindCol hstmt = (fmap K1) <$> sqlBindCol (fmap unK1 hstmt)
 
-
+typeMismatch :: (Applicative m) => [SQLType] -> ColDescriptor -> m (Either SQLErrors a)
+typeMismatch expTys col =
+  let emsg = case expTys of
+        [e] -> "Expected a type: " <> show e
+        es  -> "Expected one of types: " <> show es
+      msg = emsg <> ", but got a type: " <> show (colDataType col) <> colMsg
+      colMsg = case T.unpack (colName col) of
+        "" -> ""
+        _  -> ", in a column: " <> T.unpack (colName col)
+      se = SQLError { sqlState = ""
+                    , sqlMessage = T.pack msg
+                    , sqlReturn = -1
+                    }
+  in  pure (Left (SQLErrors [ se ]))
+                      
 class ToRow (t :: *) where
   toRow :: t -> [DBValue]
 
@@ -1408,6 +1528,7 @@ pattern SQL_NEED_DATA :: ResIndicator
 pattern SQL_NEED_DATA <- ((ResIndicator [C.pure| SQLRETURN {SQL_NEED_DATA} |] ==) -> True) where
   SQL_NEED_DATA = ResIndicator [C.pure| SQLRETURN {SQL_NEED_DATA} |]  
 
+#if __GLASGOW_HASKELL__ >= 802
 {-# COMPLETE
    SQL_NULL_DATA
  , SQL_NO_TOTAL
@@ -1421,7 +1542,8 @@ pattern SQL_NEED_DATA <- ((ResIndicator [C.pure| SQLRETURN {SQL_NEED_DATA} |] ==
  , SQL_NEED_DATA
  :: ResIndicator
  #-}
-  
+#endif
+
 newtype SQLType = SQLType C.CShort
   deriving (Eq, Storable)
 
@@ -1457,6 +1579,9 @@ instance Show SQLType where
     SQL_WLONGVARCHAR       -> "SQL_WLONGVARCHAR"
     SQL_SS_TIME2           -> "SQL_SS_TIME2"
     SQL_SS_TIMESTAMPOFFSET -> "SQL_SS_TIMESTAMPOFFSET"
+#if __GLASGOW_HASKELL__ < 802
+    _                    -> error "Panic: impossible case"
+#endif
 
 pattern SQL_UNKNOWN_TYPE :: SQLType
 pattern SQL_UNKNOWN_TYPE <- ((SQLType [C.pure| SQLSMALLINT {SQL_UNKNOWN_TYPE} |] ==) -> True) where
@@ -1578,6 +1703,7 @@ pattern SQL_SS_TIMESTAMPOFFSET :: SQLType
 pattern SQL_SS_TIMESTAMPOFFSET <- ((SQLType [C.pure| SQLSMALLINT {SQL_SS_TIMESTAMPOFFSET} |] ==) -> True) where
   SQL_SS_TIMESTAMPOFFSET = SQLType [C.pure| SQLSMALLINT {SQL_SS_TIMESTAMPOFFSET} |]  
 
+#if __GLASGOW_HASKELL__ >= 802
 {-# COMPLETE
    SQL_UNKNOWN_TYPE
  , SQL_CHAR
@@ -1611,6 +1737,7 @@ pattern SQL_SS_TIMESTAMPOFFSET <- ((SQLType [C.pure| SQLSMALLINT {SQL_SS_TIMESTA
  , SQL_SS_TIMESTAMPOFFSET
  :: SQLType
  #-}
+#endif  
 
 newtype HSCType = HSCType C.CInt
   deriving (Show, Read, Eq, Storable)
@@ -1660,6 +1787,7 @@ pattern SQL_C_WCHAR :: HSCType
 pattern SQL_C_WCHAR <- ((HSCType [C.pure| int {SQL_C_WCHAR} |] ==) -> True) where
   SQL_C_WCHAR = HSCType [C.pure| int {SQL_C_WCHAR} |]  
 
+#if __GLASGOW_HASKELL__ >= 802
 {-# COMPLETE
    SQL_C_CHAR
  , SQL_C_LONG
@@ -1674,6 +1802,7 @@ pattern SQL_C_WCHAR <- ((HSCType [C.pure| int {SQL_C_WCHAR} |] ==) -> True) wher
  , SQL_C_WCHAR
  :: HSCType
  #-}
+#endif
 
 newtype HandleType = HandleType C.CInt
   deriving (Show, Read, Eq, Storable)
@@ -1694,6 +1823,7 @@ pattern SQL_HANDLE_DESC :: HandleType
 pattern SQL_HANDLE_DESC <- ((HandleType [C.pure| int {SQL_HANDLE_DESC} |] ==) -> True) where
   SQL_HANDLE_DESC = HandleType [C.pure| int {SQL_HANDLE_DESC} |]
 
+#if __GLASGOW_HASKELL__ >= 802
 {-# COMPLETE
    SQL_HANDLE_ENV
  , SQL_HANDLE_DBC
@@ -1701,7 +1831,7 @@ pattern SQL_HANDLE_DESC <- ((HandleType [C.pure| int {SQL_HANDLE_DESC} |] ==) ->
  , SQL_HANDLE_DESC
  :: HandleType
  #-}
-
+#endif
 
 pattern SQL_ATTR_ACCESS_MODE :: ConnectAttr
 pattern SQL_ATTR_ACCESS_MODE <- ((ConnectAttr [C.pure| int {SQL_ATTR_ACCESS_MODE} |] ==) -> True) where
@@ -1801,7 +1931,8 @@ pattern SQL_ATTR_ASYNC_DBC_EVENT <- ((ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_D
   SQL_ATTR_ASYNC_DBC_EVENT = ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_EVENT} |]
 
 -}
-  
+
+#if __GLASGOW_HASKELL__ >= 802
 {-# COMPLETE
    SQL_ATTR_ACCESS_MODE
  , SQL_ATTR_AUTOCOMMIT
@@ -1826,7 +1957,7 @@ pattern SQL_ATTR_ASYNC_DBC_EVENT <- ((ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_D
  , SQL_ATTR_METADATA_ID
  :: ConnectAttr
  #-}
-
+#endif
 
 newtype NullableFieldDesc = NullableFieldDesc C.CShort
   deriving (Show, Read, Eq, Storable)
@@ -1843,9 +1974,11 @@ pattern SQL_NULLABLE_UNKNOWN :: NullableFieldDesc
 pattern SQL_NULLABLE_UNKNOWN <- ((NullableFieldDesc [C.pure| SQLSMALLINT {SQL_NULLABLE_UNKNOWN} |] ==) -> True) where
   SQL_NULLABLE_UNKNOWN = NullableFieldDesc [C.pure| SQLSMALLINT {SQL_NULLABLE_UNKNOWN} |]
 
+#if __GLASGOW_HASKELL__ >= 820
 {-# COMPLETE
    SQL_NO_NULLS
  , SQL_NULLABLE
  , SQL_NULLABLE_UNKNOWN
  :: NullableFieldDesc
  #-}  
+#endif

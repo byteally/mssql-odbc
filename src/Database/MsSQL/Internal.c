@@ -39,15 +39,12 @@ int inline_c_Database_MsSQL_Internal_0_12568841e06c0015be316b5c75973f35c46bee9e(
 }
 
 
-int inline_c_Database_MsSQL_Internal_1_de2aafb45e58c228e43877a481ca7bef5c760f70(SQLHENV henv_inline_c_0, SQLHDBC hdbc_inline_c_1) {
+int inline_c_Database_MsSQL_Internal_1_19828a9829c1a96b5a7cb7ccc5f4e7ec80a1127e(SQLHENV henv_inline_c_0, SQLHDBC hdbc_inline_c_1) {
 
-    SQLRETURN ret;
+    SQLRETURN ret = 0;
     SQLHENV henv = henv_inline_c_0;
     SQLHDBC hdbc = hdbc_inline_c_1;
 
-    SQLWCHAR eMSG [SQL_MAX_MESSAGE_LENGTH];
-    SQLSMALLINT eMSGLen;
-    
     if (hdbc != SQL_NULL_HDBC) {
       ret = SQLDisconnect(hdbc);
       if (!SQL_SUCCEEDED(ret)) return ret;
@@ -61,15 +58,16 @@ int inline_c_Database_MsSQL_Internal_1_de2aafb45e58c228e43877a481ca7bef5c760f70(
       ret = SQLFreeHandle(SQL_HANDLE_ENV, henv);
       if (!SQL_SUCCEEDED(ret)) return ret;
     }
+    return ret;
 
   
 }
 
 
-int inline_c_Database_MsSQL_Internal_2_c739d23441238881a53f44e68e430931da3d0613(SQLHANDLE handle_inline_c_0, void (* appendMessage_inline_c_1)(SQLWCHAR *, int , SQLWCHAR *, int ), int handleType_inline_c_2) {
+int inline_c_Database_MsSQL_Internal_2_78c9f54187ca27c1a76c3e445bce8c4a2963c42d(SQLHANDLE handle_inline_c_0, void (* appendMessage_inline_c_1)(SQLWCHAR *, int , SQLWCHAR *, int ), int handleType_inline_c_2) {
 
              SQLRETURN ret = 0;
-             SQLINTEGER i = 0;
+             SQLSMALLINT i = 0;
              SQLWCHAR eState [6]; 
              SQLWCHAR eMSG [SQL_MAX_MESSAGE_LENGTH];
              SQLSMALLINT eMSGLen;
@@ -90,15 +88,13 @@ int inline_c_Database_MsSQL_Internal_2_c739d23441238881a53f44e68e430931da3d0613(
 }
 
 
-int inline_c_Database_MsSQL_Internal_3_4b3372607f1148b96fd48f62379094ac41e6362a(SQLHENV henv_inline_c_0, SQLHDBC hdbc_inline_c_1, SQLHSTMT hstmt_inline_c_2, SQLSMALLINT * numResultColsFP_inline_c_3, SQLWCHAR * queryWStr_inline_c_4, int queryLen_inline_c_5) {
+int inline_c_Database_MsSQL_Internal_3_795858118c95cd1f23b430e443725afc8e2bece6(SQLHSTMT hstmt_inline_c_0, SQLSMALLINT * numResultColsFP_inline_c_1, SQLWCHAR * queryWStr_inline_c_2, int queryLen_inline_c_3) {
 
     SQLRETURN ret = 0;
-    SQLHENV henv = henv_inline_c_0;
-    SQLHDBC hdbc = hdbc_inline_c_1;
-    SQLHSTMT hstmt = hstmt_inline_c_2;
-    SQLSMALLINT* numColumnPtr = numResultColsFP_inline_c_3;
+    SQLHSTMT hstmt = hstmt_inline_c_0;
+    SQLSMALLINT* numColumnPtr = numResultColsFP_inline_c_1;
 
-    ret = SQLExecDirectW(hstmt, queryWStr_inline_c_4, queryLen_inline_c_5);
+    ret = SQLExecDirectW(hstmt, queryWStr_inline_c_2, queryLen_inline_c_3);
     if (!SQL_SUCCEEDED(ret)) return ret;
 
     ret = SQLNumResultCols(hstmt, numColumnPtr);
@@ -163,7 +159,7 @@ SQLRETURN inline_c_Database_MsSQL_Internal_8_06a444af8a2e153b221c6e98d561cf5789d
 }
 
 
-SQLRETURN inline_c_Database_MsSQL_Internal_9_b525ab8c4623c366438bfc4ef8914fb976c0f2a7(SQLHSTMT hstmt_inline_c_0, SQLSMALLINT * nameLengthP_inline_c_1, SQLSMALLINT * dataTypeP_inline_c_2, SQLSMALLINT * decimalDigitsP_inline_c_3, SQLSMALLINT * nullableP_inline_c_4, SQLULEN * colSizeP_inline_c_5, SQLWCHAR * tabNameP_inline_c_6, SQLUSMALLINT colPos_27_inline_c_7) {
+SQLRETURN inline_c_Database_MsSQL_Internal_9_51cc2d23044b16fed831eb48ae395b8f22a4425c(SQLHSTMT hstmt_inline_c_0, SQLSMALLINT * nameLengthP_inline_c_1, SQLSMALLINT * dataTypeP_inline_c_2, SQLSMALLINT * decimalDigitsP_inline_c_3, SQLSMALLINT * nullableP_inline_c_4, SQLULEN * colSizeP_inline_c_5, SQLWCHAR * tabNameP_inline_c_6, SQLUSMALLINT colPos_27_inline_c_7) {
 
                           SQLRETURN ret = 0;
                           SQLHSTMT hstmt = hstmt_inline_c_0;
@@ -175,6 +171,7 @@ SQLRETURN inline_c_Database_MsSQL_Internal_9_b525ab8c4623c366438bfc4ef8914fb976c
                           SQLWCHAR* tabNameP = tabNameP_inline_c_6;
                
                           ret = SQLDescribeColW(hstmt, colPos_27_inline_c_7, tabNameP, 16 * 128, nameLengthP, dataTypeP, colSizeP, decimalDigitsP, nullableP);
+                          return ret;
                       
 }
 

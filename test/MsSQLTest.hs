@@ -31,6 +31,7 @@ import Test.Tasty.Hedgehog
 import Data.Functor.Identity
 import Data.Typeable
 import Data.Fixed
+import qualified Data.HashMap.Strict as HM
 
 
 data TestT1 = TestT1
@@ -73,20 +74,44 @@ uc ::String
 uc = "🌀"
 
 
-testConnectInfo :: ConnectInfo  
-testConnectInfo = connectInfo "Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=hask;UID=sa;PWD=P@ssw0rd;ApplicationIntent=ReadOnly"
+data Album = Album Int Text Int
+           deriving (Generic, Show)
+
+instance FromRow Album
+
+-- connectInfo (ConnectionString {})
+-- connectInfo ""
+
+-- testConnectInfo :: ConnectInfo  
+-- testConnectInfo = connectInfo "Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=Chinook;UID=sa;PWD=p@ssw0rd;ApplicationIntent=ReadOnly"
+
+localConnectionStr :: ConnectionString 
+localConnectionStr =
+  ConnectionString { database          = "Chinook"
+                   , server            = "localhost"
+                   , port              = 1433
+                   , user              = "sa"
+                   , password          = "p@ssw0rd"
+                   , odbcDriver        = odbcSQLServer17
+                   , connectProperties = HM.singleton "ApplicationIntent" "ReadOnly"
+                   }
+
+testConnectInfo :: ConnectInfo
+testConnectInfo = connectInfo localConnectionStr
 
 unit_connect :: IO ()
 unit_connect = do
-  let conInfo = (testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]})
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
   Right con <- connect conInfo
-  res <- query con "select * from test1" :: IO (Either SQLErrors (Vector TestT1))
-  print res
+  res <- query con "select * from Album" :: IO (Either SQLErrors (Vector Album))
+  res1 <- runSession testConnectInfo $ query_ "select 5"
+
+  print (res, res1 :: (Either SQLErrors (Vector (Identity Int))))
   disconnect con
   pure ()
 
-unit_sqlinsert :: IO ()
-unit_sqlinsert = do
+_unit_sqlinsert :: IO ()
+_unit_sqlinsert = do
   res <- runSession testConnectInfo $ do
     execute_ "insert test1 (test_id, col1, col2, col3, col4, smallint, bit, tinyint, bigint, dbl, flt, datec, tod, dt, dt2, sdt, dtz, utc1, uuid, ntxt, char10, nchar10) VALUES (5, '12/13/2012', 3, 'fdfd', 'fdffddf', 32, 1, 23,99999999,4, 6.5,'1/13/2013', '00:00:00', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123+05:30', '2015-03-19 05:15:18.123+05:30', '0E984725-C51C-4BF4-9960-E1C80E27ABA0', N'🌀', 'dfd', N'🌀');"
   print res
@@ -135,7 +160,7 @@ test_roundTrip =
   , testProperty "@Double" $ withTests 100 $ roundTrip (Gen.double $ Range.exponentialFloat (-100) 100)
 
   ]
-
+  
 day :: MonadGen m => m Day
 day = Gen.just $ do
   dy <- Gen.enum 1 31

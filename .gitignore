@@ -18,6 +18,7 @@ cabal.sandbox.config
 _build_html/
 _darcs
 docs/_build
+.ghc.environment.*
 
 ### Emacs ###
 # -*- mode: gitignore; -*-
@@ -53,6 +54,7 @@ tramp
 # cask packages
 .cask/
 dist/
+dist-newstyle/
 
 # Flycheck
 flycheck_*.el

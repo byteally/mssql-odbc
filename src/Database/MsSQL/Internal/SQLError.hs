@@ -1,9 +1,13 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE CPP                        #-}
 module Database.MsSQL.Internal.SQLError where
 
 import Data.Text (Text)
 import Data.Int
 import Control.Exception
+#if __GLASGOW_HASKELL__ < 802
+import Data.Semigroup
+#endif
 
 data SQLError = SQLError
   { sqlState   :: Text

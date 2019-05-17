@@ -36,6 +36,7 @@ library
               , contravariant
               , profunctors
               , transformers
+              , unordered-containers
               , mtl
               , time
               , uuid-types
@@ -51,7 +52,7 @@ library
   if impl(ghc < 8.2.0)
     c-sources:           src/Database/MsSQL/Internal.c
   default-language: Haskell2010
-  ghc-options: -Wall
+  ghc-options: -Wall -Werror
   cc-options: -Wall -Wconversion
   if os(mingw32) || os(win32)
     extra-libraries: odbc32
@@ -81,6 +82,7 @@ test-suite mssql-odbc-test
               , text
               , time
               , uuid-types
+              , unordered-containers
   other-modules:
       Paths_mssql_odbc
   default-language: Haskell2010
