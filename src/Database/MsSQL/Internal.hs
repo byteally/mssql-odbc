@@ -932,7 +932,7 @@ instance SQLBindCol (ColBuffer CWchar) where
     case colDescE of
       Left e -> pure $ Left e
       Right cdesc
-        | colDataType cdesc `elem` [SQL_LONGVARCHAR, SQL_WLONGVARCHAR] -> do
+        | colDataType cdesc `elem` [SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR] -> do
             let cpos = colPosition cdesc
             txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -962,7 +962,7 @@ instance SQLBindCol (ColBuffer CText) where
     case colDescE of
       Left e -> pure $ Left e
       Right cdesc
-        | colDataType cdesc `elem` [SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WCHAR] -> do
+        | colDataType cdesc `elem` [SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WCHAR, SQL_WVARCHAR] -> do
             let cpos = colPosition cdesc
             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
             ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
