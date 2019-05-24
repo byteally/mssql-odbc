@@ -10,7 +10,7 @@ C.include "<windows.h>"
 #endif
   
 #include <sqltypes.h>
-#include <msodbcsql.h>
+#include <ss.h>
 
 newtype CDate = CDate{ getDate :: Day }
               deriving (Show, Eq)

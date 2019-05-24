@@ -183,7 +183,7 @@ C.include "<stdlib.h>"
 C.include "<sqlext.h>"
 C.include "<sqltypes.h>"
 C.include "<sqlucode.h>"
-C.include "ss.h"
+C.include "<ss.h>"
 
 connectInfo :: ConnectionString -> ConnectInfo
 connectInfo conStr = ConnectInfo

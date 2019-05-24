@@ -11,7 +11,7 @@
 
 #include <sqlucode.h>
 
-#include <msodbcsql.h>
+#include <ss.h>
 
 int inline_c_Database_MsSQL_Internal_0_12568841e06c0015be316b5c75973f35c46bee9e(SQLHENV * henvp_inline_c_0, SQLHDBC * hdbcp_inline_c_1, SQLWCHAR * ctxt_inline_c_2, int ctxtLen_inline_c_3) {
 

@@ -58,6 +58,7 @@ library
     extra-libraries: odbc32
   else
     extra-libraries: odbc
+  include-dirs: include
 
 test-suite mssql-odbc-test
   type: exitcode-stdio-1.0
