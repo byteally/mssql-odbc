@@ -74,7 +74,7 @@ uc ::String
 uc = "🌀"
 
 
-data Album = Album Int Text Int
+data Album = Album Int32 Text Int32
            deriving (Generic, Show)
 
 instance FromRow Album
@@ -106,7 +106,7 @@ unit_connect = do
   res <- query con "select * from Album" :: IO (Either SQLErrors (Vector Album))
   res1 <- runSession testConnectInfo $ query_ "select 5"
 
-  print (res, res1 :: (Either SQLErrors (Vector (Identity Int))))
+  print (res, res1 :: (Either SQLErrors (Vector (Identity Int32))))
   disconnect con
   pure ()
 
@@ -134,6 +134,12 @@ test_roundTrip =
 
   , testProperty "maxBound @Int64" $ withTests 1 $ roundTrip (Gen.int64 $ Range.singleton $ maxBound @Int64)
   , testProperty "minBound @Int64" $ withTests 1 $ roundTrip (Gen.int64 $ Range.singleton $ minBound @Int64)
+
+  , testProperty "minBound @Money" $ withTests 1 $ roundTrip (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
+  , testProperty "maxBound @Money" $ withTests 1 $ roundTrip (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
+
+  , testProperty "minBound @SmallMoney" $ withTests 1 $ roundTrip (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  
+  , testProperty "maxBound @SmallMoney" $ withTests 1 $ roundTrip (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  
   
   -- , testProperty "maxBound @Word" $ withTests 1 $ roundTrip (Gen.word $ Range.singleton $ maxBound @Word)
   -- , testProperty "minBound @Word" $ withTests 1 $ roundTrip (Gen.word $ Range.singleton $ minBound @Word)
@@ -160,6 +166,9 @@ test_roundTrip =
   , testProperty "@Double" $ withTests 100 $ roundTrip (Gen.double $ Range.exponentialFloat (-100) 100)
 
   ]
+
+  where toMoney i64 = Money (read (show i64) / 10000)
+        toSmallMoney i32 = SmallMoney (read (show i32) / 10000)  
   
 day :: MonadGen m => m Day
 day = Gen.just $ do
@@ -192,7 +201,6 @@ roundTrip :: forall a.
   , Eq a
   , FromField a
   , Typeable a
-  , SQLBindCol (ColBuffer (FieldBufferType a))
   ) => Gen a -> Property
 roundTrip gen =
   property $ do
@@ -223,6 +231,9 @@ getSQLType a = case show $ typeRep a of
   "LocalTime" -> ("DATETIME2", True)
   "Float"     -> ("REAL", False)
   "Double"    -> ("FLOAT(53)", False)
+  "Money"    -> ("MONEY", True)
+  "SmallMoney" -> ("SMALLMONEY", True)  
+  
 {-
   "Int8"   -> "TINYINT"
   "Word"   -> "NUMERIC(20,0)"

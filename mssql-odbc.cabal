@@ -40,6 +40,8 @@ library
               , mtl
               , time
               , uuid-types
+              , scientific
+
   exposed-modules:
                   Database.MsSQL
                   Database.MsSQL.Internal
