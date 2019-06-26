@@ -1315,31 +1315,6 @@ instance SQLBindCol (ColBuffer UUID) where
        True -> pure $ Right (ColBuffer (uuidFP) lenOrIndFP)
        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
-instance (SQLBindCol a, SQLBindCol b) => SQLBindCol (a, b) where
-  sqlBindCol hstmt = do
-    col1E <- sqlBindCol (fmap fst hstmt)
-    col2E <- sqlBindCol (fmap snd hstmt)
-    pure ((,) <$> col1E <*> col2E) 
-
-instance (SQLBindCol (f a)) => SQLBindCol (M1 c i f a) where
-  sqlBindCol hstmt = (fmap M1) <$> sqlBindCol (fmap unM1 hstmt)
-
-instance (SQLBindCol (f a), SQLBindCol (g a)) => SQLBindCol ((f :*: g) a) where
-  sqlBindCol hstmt = do
-    let
-      _1 (f :*: _) = f
-      _2 (_ :*: g) = g
-    fE <- sqlBindCol (fmap _1 hstmt)
-    gE <- sqlBindCol (fmap _2 hstmt)
-    pure ((:*:) <$> fE <*> gE)
-
-instance SQLBindCol (U1 a) where
-  sqlBindCol _ = pure $ Right U1
-
-instance SQLBindCol a => SQLBindCol (K1 i a t) where
-  sqlBindCol hstmt = (fmap K1) <$> sqlBindCol (fmap unK1 hstmt)
-
-
 typeMismatch :: (Applicative m) => [SQLType] -> ColDescriptor -> m (Either SQLErrors a)
 typeMismatch expTys col =
   let emsg = case expTys of
