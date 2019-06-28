@@ -808,6 +808,12 @@ instance FromField ByteString where
   fromField = \v -> do
     lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
     withForeignPtr (getColBuffer v) $ \ccharP -> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
+
+instance FromField Image where
+  type FieldBufferType Image = CImage
+  fromField = \v -> do
+    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
+    withForeignPtr (castForeignPtr $ getColBuffer v) $ \ccharP -> Image <$> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
     
 instance FromField T.Text where
   type FieldBufferType T.Text = CText
@@ -898,6 +904,34 @@ sqlBindColTpl hstmt exps block = do
 
      where match cdesc = colDataType cdesc `elem` exps
 
+newtype CImage = CImage CChar
+  deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+
+
+-- TODO: Test when  buffersize is less than col size, read is not failing and simply empty row are returning
+instance SQLBindCol (ColBuffer CImage) where
+  sqlBindCol hstmt =
+    sqlBindColTpl hstmt
+    [SQL_LONGVARBINARY] $ \hstmtP cdesc -> do
+      let
+        cpos = colPosition cdesc
+        bufferLen = fromIntegral $ colSize cdesc + 1
+      chrFP <- mallocForeignPtrBytes (fromIntegral bufferLen)
+      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+      ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
+        [C.block| int {
+          SQLRETURN ret = 0;
+          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+          SQLLEN bufferLen = $(SQLLEN bufferLen);
+          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrp), bufferLen, lenOrInd);
+          return ret;
+        }|]
+
+      case isSuccessful ret of
+        True -> pure $ Right (ColBuffer (coerce chrFP) lenOrIndFP)
+        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
+
 -- TODO: Test when  buffersize is less than col size, read is not failing and simply empty row are returning
 instance SQLBindCol (ColBuffer CChar) where
   sqlBindCol hstmt =
@@ -939,7 +973,7 @@ instance SQLBindCol (ColBuffer CWchar) where
         }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer txtFP lenOrIndFP)
+        True -> pure $ Right (ColBuffer (coerce txtFP) lenOrIndFP)
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 newtype CText = CText CWchar
@@ -1858,4 +1892,8 @@ newtype SmallMoney = SmallMoney { getSmallMoney :: Scientific }
 instance Show SmallMoney where
   show (SmallMoney s) =
     formatScientific Fixed (Just 4) s
+
+newtype Image = Image { getImage :: ByteString }
+              deriving (Eq, Show)
+
 

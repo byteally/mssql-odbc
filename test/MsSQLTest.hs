@@ -104,9 +104,9 @@ unit_connect = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
   Right con <- connect conInfo
   res <- query con "select * from Album" :: IO (Either SQLErrors (Vector Album))
-  res1 <- runSession testConnectInfo $ query_ "select 5"
+  res1 <- runSession testConnectInfo $ query_ "select img from test"
 
-  print (res, res1 :: (Either SQLErrors (Vector (Identity Int32))))
+  print (res, res1 :: (Either SQLErrors (Vector (Identity Image))))
   disconnect con
   pure ()
 
