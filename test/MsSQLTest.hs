@@ -32,6 +32,8 @@ import Data.Functor.Identity
 import Data.Typeable
 import Data.Fixed
 import qualified Data.HashMap.Strict as HM
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 
 
 data TestT1 = TestT1
@@ -106,7 +108,11 @@ unit_connect = do
   res <- query con "select * from Album" :: IO (Either SQLErrors (Vector Album))
   res1 <- runSession testConnectInfo $ query_ "select img from test"
 
-  print (res, res1 :: (Either SQLErrors (Vector (Identity Image))))
+  print res
+  case res1 :: Either SQLErrors (Vector (Identity Image)) of
+    Right vs        ->
+      mapM (BS.writeFile "/tmp/output.png" . getImage . runIdentity) vs >> pure ()
+    Left es         -> print es
   disconnect con
   pure ()
 
@@ -117,8 +123,8 @@ _unit_sqlinsert = do
   print res
 
 
-test_roundTrip :: TestTree
-test_roundTrip =
+_test_roundTrip :: TestTree
+_test_roundTrip =
   testGroup "round trip tests"
   [ testProperty "maxBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ minBound @Int)

@@ -812,7 +812,8 @@ instance FromField ByteString where
 instance FromField Image where
   type FieldBufferType Image = CImage
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
+    _lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
+    let lengthOrIndicator = 29032 :: Int
     withForeignPtr (castForeignPtr $ getColBuffer v) $ \ccharP -> Image <$> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
     
 instance FromField T.Text where
@@ -916,6 +917,7 @@ instance SQLBindCol (ColBuffer CImage) where
       let
         cpos = colPosition cdesc
         bufferLen = fromIntegral $ colSize cdesc + 1
+      putStrLn $ "Length: " ++ show bufferLen      
       chrFP <- mallocForeignPtrBytes (fromIntegral bufferLen)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
