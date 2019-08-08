@@ -126,26 +126,26 @@ _unit_sqlinsert = do
 test_roundTrip :: TestTree
 test_roundTrip =
   testGroup "round trip tests"
-  [ testProperty "maxBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ maxBound @Int)
-  , testProperty "minBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ minBound @Int)
+  [ -- testProperty "maxBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ maxBound @Int)
+  -- , testProperty "minBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ minBound @Int)
   
-  -- , testProperty "maxBound @Int8" $ withTests 1 $ roundTrip (Gen.int8 $ Range.singleton $ maxBound @Int8)
-  -- , testProperty "minBound @Int8" $ withTests 1 $ roundTrip (Gen.int8 $ Range.singleton $ minBound @Int8)
+  -- #, testProperty "maxBound @Int8" $ withTests 1 $ roundTrip (Gen.int8 $ Range.singleton $ maxBound @Int8)
+  -- #, testProperty "minBound @Int8" $ withTests 1 $ roundTrip (Gen.int8 $ Range.singleton $ minBound @Int8)
 
-  , testProperty "maxBound @Int16" $ withTests 1 $ roundTrip (Gen.int16 $ Range.singleton $ maxBound @Int16)
-  , testProperty "minBound @Int16" $ withTests 1 $ roundTrip (Gen.int16 $ Range.singleton $ minBound @Int16)
+  -- , testProperty "maxBound @Int16" $ withTests 1 $ roundTrip (Gen.int16 $ Range.singleton $ maxBound @Int16)
+  -- , testProperty "minBound @Int16" $ withTests 1 $ roundTrip (Gen.int16 $ Range.singleton $ minBound @Int16)
 
-  , testProperty "maxBound @Int32" $ withTests 1 $ roundTrip (Gen.int32 $ Range.singleton $ maxBound @Int32)
-  , testProperty "minBound @Int32" $ withTests 1 $ roundTrip (Gen.int32 $ Range.singleton $ minBound @Int32)
+  -- , testProperty "maxBound @Int32" $ withTests 1 $ roundTrip (Gen.int32 $ Range.singleton $ maxBound @Int32)
+  -- , testProperty "minBound @Int32" $ withTests 1 $ roundTrip (Gen.int32 $ Range.singleton $ minBound @Int32)
 
-  , testProperty "maxBound @Int64" $ withTests 1 $ roundTrip (Gen.int64 $ Range.singleton $ maxBound @Int64)
-  , testProperty "minBound @Int64" $ withTests 1 $ roundTrip (Gen.int64 $ Range.singleton $ minBound @Int64)
+  -- , testProperty "maxBound @Int64" $ withTests 1 $ roundTrip (Gen.int64 $ Range.singleton $ maxBound @Int64)
+  -- , testProperty "minBound @Int64" $ withTests 1 $ roundTrip (Gen.int64 $ Range.singleton $ minBound @Int64)
 
-  , testProperty "minBound @Money" $ withTests 1 $ roundTrip (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
-  , testProperty "maxBound @Money" $ withTests 1 $ roundTrip (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
+  -- , testProperty "minBound @Money" $ withTests 1 $ roundTrip (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
+  -- , testProperty "maxBound @Money" $ withTests 1 $ roundTrip (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
 
-  , testProperty "minBound @SmallMoney" $ withTests 1 $ roundTrip (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  
-  , testProperty "maxBound @SmallMoney" $ withTests 1 $ roundTrip (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  
+  -- , testProperty "minBound @SmallMoney" $ withTests 1 $ roundTrip (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  
+  -- , testProperty "maxBound @SmallMoney" $ withTests 1 $ roundTrip (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  
   
   -- , testProperty "maxBound @Word" $ withTests 1 $ roundTrip (Gen.word $ Range.singleton $ maxBound @Word)
   -- , testProperty "minBound @Word" $ withTests 1 $ roundTrip (Gen.word $ Range.singleton $ minBound @Word)
@@ -162,19 +162,31 @@ test_roundTrip =
   -- , testProperty "maxBound @Word64" $ withTests 1 $ roundTrip (Gen.word64 $ Range.singleton $ maxBound @Word64)
   -- , testProperty "minBound @Word64" $ withTests 1 $ roundTrip (Gen.word64 $ Range.singleton $ minBound @Word64)
 
-  , testProperty "@Bool" $ roundTrip ((\b -> if b then 1 else 0 :: Word8) <$> Gen.bool)
-  , testProperty "@Day" $ withTests 100 $ roundTrip (day)
-  , testProperty "@TimeOfDay" $ withTests 100 $ roundTrip (timeOfDay)
-  , testProperty "@LocalTime" $ withTests 100 $ roundTrip (localTime)
+  -- , testProperty "@Bool" $ roundTrip ((\b -> if b then 1 else 0 :: Word8) <$> Gen.bool)
+  -- , testProperty "@Day" $ withTests 100 $ roundTrip (day)
+  -- , testProperty "@TimeOfDay" $ withTests 100 $ roundTrip (timeOfDay)
+  -- , testProperty "@LocalTime" $ withTests 100 $ roundTrip (localTime)
 
-  , testProperty "@Float" $ withTests 100 $ roundTrip (Gen.float $ Range.exponentialFloat (-100) 100)
+  -- , testProperty "@Float" $ withTests 100 $ roundTrip (Gen.float $ Range.exponentialFloat (-100) 100)
 
-  , testProperty "@Double" $ withTests 100 $ roundTrip (Gen.double $ Range.exponentialFloat (-100) 100)
+  -- , testProperty "@Double" $ withTests 100 $ roundTrip (Gen.double $ Range.exponentialFloat (-100) 100)
+    testProperty "@ASCIIText" $ withTests 100 $ roundTripWith asciiText getAsciiText
 
   ]
 
   where toMoney i64 = Money (read (show i64) / 10000)
         toSmallMoney i32 = SmallMoney (read (show i32) / 10000)  
+
+asciiText :: MonadGen m => m ASCIIText
+asciiText =
+  (ASCIIText . T.pack . escapeQuotes) <$> Gen.list (Range.constant 0 1000) Gen.ascii
+
+  where escapeQuotes =
+          foldr (\a acc -> case a of
+                    '\'' -> "\\\'" <> acc
+                    _    -> a : acc
+                ) []
+  
   
 day :: MonadGen m => m Day
 day = Gen.just $ do
@@ -201,7 +213,6 @@ localTime = do
   tod <- timeOfDay
   pure $ LocalTime dy tod
 
-
 roundTrip :: forall a.
   ( Show a
   , Eq a
@@ -209,15 +220,25 @@ roundTrip :: forall a.
   , Typeable a
   ) => Gen a -> Property
 roundTrip gen =
+  roundTripWith gen (T.pack . show)
+
+roundTripWith :: forall a.
+  ( Eq a
+  , FromField a
+  , Typeable a
+  , Show a
+  ) => Gen a -> (a -> Text) -> Property
+roundTripWith gen f =
   property $ do
     val <- forAll gen
-    let valTxt = (T.pack $ show val)
+    let valTxt = f val
         sqlType = fst $ getSQLType gen
         isQuoted = snd $ getSQLType gen
         fmtedVal = if isQuoted then "'" <> valTxt <> "'" else valTxt
 --    liftIO $ print $ "select CAST (" <> fmtedVal <> " AS " <> (sqlType) <> ")"
     r <- evalEither =<< (
       liftIO $ runSession testConnectInfo $ do
+          liftIO $ print ("select CAST (" <> fmtedVal <> " AS " <> (sqlType) <> ")")
           r :: Vector (Identity a) <- query_ $ ("select CAST (" <> fmtedVal <> " AS " <> (sqlType) <> ")")
           pure r
       )
@@ -239,6 +260,7 @@ getSQLType a = case show $ typeRep a of
   "Double"    -> ("FLOAT(53)", False)
   "Money"    -> ("MONEY", True)
   "SmallMoney" -> ("SMALLMONEY", True)  
+  "ASCIIText" -> ("VARCHAR", True)  
   
 {-
   "Int8"   -> "TINYINT"

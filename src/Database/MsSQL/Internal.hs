@@ -28,6 +28,7 @@ module Database.MsSQL.Internal
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import Data.ByteString.Builder (Builder)
 import qualified Data.ByteString.Builder as BSB
 import qualified Language.C.Inline as C
@@ -745,7 +746,7 @@ class ( SQLBindCol ((ColBuffer (FieldBufferType t)))
       ) => FromField t where
   type FieldBufferType t :: *
   fromField :: ColBuffer (FieldBufferType t) -> IO t
-  
+
 instance FromField Int where
   type FieldBufferType Int = CBigInt
   fromField = \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
@@ -804,6 +805,17 @@ instance FromField Bool where
   type FieldBufferType Bool = CBool
   fromField = \i -> extractVal i >>= (\v -> pure $ if v == 1 then True else False)
 
+newtype ASCIIText = ASCIIText { getAsciiText :: T.Text }
+                  deriving (Show, Eq)
+
+instance FromField ASCIIText where
+  type FieldBufferType ASCIIText = CChar
+  fromField = \v -> do
+    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
+    withForeignPtr (getColBuffer v) $ \ccharP -> transform <$> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
+
+    where transform = ASCIIText . T.pack . BS8.unpack
+  
 instance FromField ByteString where
   type FieldBufferType ByteString = CChar
   fromField = \v -> do
