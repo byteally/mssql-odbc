@@ -66,6 +66,7 @@ import Data.Semigroup
 import Data.Functor.Compose
 import Control.Applicative hiding ((<**>))
 import Data.Scientific
+import Data.Typeable
 
 data ConnectParams = ConnectParams
                      T.Text
@@ -893,17 +894,22 @@ type SQLBindColM t = ReaderT ColPos IO (Either SQLErrors t)
 class SQLBindCol t where
   sqlBindCol :: HSTMT t -> IO (Either SQLErrors t)
 
-sqlBindColTpl :: HSTMT t -> [SQLType] -> (Ptr SQLHSTMT -> ColDescriptor -> IO (Either SQLErrors t)) -> IO (Either SQLErrors t)
-sqlBindColTpl hstmt exps block = do
-   let hstmtP = getHSTMT hstmt
+sqlBindColTpl :: forall t. (Typeable t) =>
+                      HSTMT (ColBuffer t) ->
+                      (Ptr SQLHSTMT -> ColDescriptor -> IO (Either SQLErrors (ColBuffer t))) ->
+                      IO (Either SQLErrors (ColBuffer t))
+sqlBindColTpl hstmt block = do
+   let hstmtP = getHSTMT hstmt       
    colDescE <- getCurrentColDescriptorAndMove hstmt
    case colDescE of
      Left e -> pure $ Left e
      Right cdesc
        | match cdesc -> block hstmtP cdesc
-       | otherwise -> typeMismatch exps cdesc
+       | otherwise   -> typeMismatch exps cdesc
 
      where match cdesc = colDataType cdesc `elem` exps
+           exps        = maybe [] id (HM.lookup rep sqlMapping)
+           rep         = typeOf (undefined :: t)
 
 newtype CImage = CImage CChar
   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -912,8 +918,7 @@ newtype CImage = CImage CChar
 -- TODO: Test when  buffersize is less than col size, read is not failing and simply empty row are returning
 instance SQLBindCol (ColBuffer CImage) where
   sqlBindCol hstmt =
-    sqlBindColTpl hstmt
-    [SQL_LONGVARBINARY] $ \hstmtP cdesc -> do
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
         bufferLen = fromIntegral $ colSize cdesc + 1
@@ -937,8 +942,7 @@ instance SQLBindCol (ColBuffer CImage) where
 -- TODO: Test when  buffersize is less than col size, read is not failing and simply empty row are returning
 instance SQLBindCol (ColBuffer CChar) where
   sqlBindCol hstmt =
-    sqlBindColTpl hstmt
-    [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR] $ \hstmtP cdesc -> do
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
         bufferLen = fromIntegral $ colSize cdesc + 1
@@ -960,8 +964,7 @@ instance SQLBindCol (ColBuffer CChar) where
         
 instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt =
-    sqlBindColTpl hstmt
-    [SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR] $ \hstmtP cdesc -> do
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -983,8 +986,7 @@ newtype CText = CText CWchar
 
 instance SQLBindCol (ColBuffer CText) where
   sqlBindCol hstmt =
-    sqlBindColTpl hstmt
-    [SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WCHAR, SQL_WVARCHAR] $ \hstmtP cdesc -> do
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1006,8 +1008,7 @@ newtype CMoney = CMoney CWchar
 
 instance SQLBindCol (ColBuffer CMoney) where
   sqlBindCol hstmt =
-    sqlBindColTpl hstmt
-    [SQL_DECIMAL] $ \hstmtP cdesc -> do
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1029,8 +1030,7 @@ newtype CUTinyInt = CUTinyInt CUChar
 
 instance SQLBindCol (ColBuffer CUTinyInt) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt
-   [SQL_TINYINT] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
         chrFP <- mallocForeignPtr
         let cpos = colPosition cdesc
         lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1053,7 +1053,7 @@ newtype CTinyInt = CTinyInt CChar
 
 instance SQLBindCol (ColBuffer CTinyInt) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_TINYINT] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       chrFP <- mallocForeignPtr
       let cpos = colPosition cdesc
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1072,7 +1072,7 @@ instance SQLBindCol (ColBuffer CTinyInt) where
 
 instance SQLBindCol (ColBuffer CLong) where
   sqlBindCol hstmt = 
-   sqlBindColTpl hstmt [SQL_INTEGER] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       intFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1091,7 +1091,7 @@ instance SQLBindCol (ColBuffer CLong) where
 
 instance SQLBindCol (ColBuffer CULong) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_INTEGER] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       intFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1113,7 +1113,7 @@ newtype CSmallInt = CSmallInt CShort
 
 instance SQLBindCol (ColBuffer CSmallInt) where
   sqlBindCol hstmt = 
-   sqlBindColTpl hstmt [SQL_SMALLINT] $ \hstmtP cdesc -> do 
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do 
        let cpos = colPosition cdesc
        shortFP <- mallocForeignPtr           
        lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1135,7 +1135,7 @@ newtype CUSmallInt = CUSmallInt CShort
 
 instance SQLBindCol (ColBuffer CUSmallInt) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_SMALLINT] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       shortFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1154,7 +1154,7 @@ instance SQLBindCol (ColBuffer CUSmallInt) where
 
 instance SQLBindCol (ColBuffer CFloat) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_REAL] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       floatFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1173,7 +1173,7 @@ instance SQLBindCol (ColBuffer CFloat) where
 
 instance SQLBindCol (ColBuffer CDouble) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_FLOAT] $ \hstmtP cdesc -> do    
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do    
       let cpos = colPosition cdesc
       floatFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1192,7 +1192,7 @@ instance SQLBindCol (ColBuffer CDouble) where
 
 instance SQLBindCol (ColBuffer CBool) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_BIT] $ \hstmtP cdesc -> do        
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do        
       let cpos = colPosition cdesc
       chrFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1211,7 +1211,7 @@ instance SQLBindCol (ColBuffer CBool) where
 
 instance SQLBindCol (ColBuffer CDate) where
   sqlBindCol hstmt = do
-   sqlBindColTpl hstmt [SQL_DATE, SQL_TYPE_DATE] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
       dateFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1234,7 +1234,7 @@ newtype CBigInt = CBigInt CLLong
 
 instance SQLBindCol (ColBuffer CBigInt) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_BIGINT] $ \hstmtP cdesc -> do    
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do    
       let cpos = colPosition cdesc
       llongFP <- mallocForeignPtr
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1256,7 +1256,7 @@ newtype CUBigInt = CUBigInt CULLong
 
 instance SQLBindCol (ColBuffer CUBigInt) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_BIGINT] $ \hstmtP cdesc -> do    
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do    
      let cpos = colPosition cdesc
      llongFP <- mallocForeignPtr           
      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1276,7 +1276,7 @@ instance SQLBindCol (ColBuffer CUBigInt) where
 
 instance SQLBindCol (ColBuffer CTimeOfDay) where
   sqlBindCol hstmt = do
-   sqlBindColTpl hstmt [SQL_TIME, SQL_SS_TIME2] $ \hstmtP cdesc -> do    
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do    
      let cpos = colPosition cdesc
      todFP <- mallocForeignPtr
      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1295,7 +1295,7 @@ instance SQLBindCol (ColBuffer CTimeOfDay) where
         
 instance SQLBindCol (ColBuffer CLocalTime) where
   sqlBindCol hstmt = do
-   sqlBindColTpl hstmt [SQL_TIMESTAMP, SQL_TYPE_TIMESTAMP] $
+   sqlBindColTpl hstmt $
      \hstmtP cdesc -> do
        let cpos = colPosition cdesc
        ltimeFP <- mallocForeignPtr
@@ -1315,7 +1315,7 @@ instance SQLBindCol (ColBuffer CLocalTime) where
 
 instance SQLBindCol (ColBuffer CZonedTime) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_SS_TIMESTAMPOFFSET] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
      let cpos = colPosition cdesc
      ltimeFP <- mallocForeignPtr
      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1334,7 +1334,7 @@ instance SQLBindCol (ColBuffer CZonedTime) where
 
 instance SQLBindCol (ColBuffer UUID) where
   sqlBindCol hstmt =
-   sqlBindColTpl hstmt [SQL_GUID] $ \hstmtP cdesc -> do
+   sqlBindColTpl hstmt $ \hstmtP cdesc -> do
      let cpos = colPosition cdesc
      uuidFP <- mallocForeignPtr
      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1356,7 +1356,13 @@ typeMismatch expTys col =
   let emsg = case expTys of
         [e] -> "Expected a type: " <> show e
         es  -> "Expected one of types: " <> show es
-      msg = emsg <> ", but got a type: " <> show (colDataType col) <> colMsg
+      msg = emsg <> ", but got a type: " <> show colType <> colMsg <> hintMsg
+      hintMsg = "  HINT: " <> show colType <> " is mapped to the following " <> show matches
+      colType = colDataType col
+      matches = HM.foldlWithKey' (\a k v -> case colType `elem` v of
+                                     True -> k : a
+                                     False -> a
+                                 ) [] sqlMapping
       colMsg = case T.unpack (colName col) of
         "" -> ""
         _  -> ", in a column: " <> T.unpack (colName col)
@@ -1898,4 +1904,31 @@ instance Show SmallMoney where
 newtype Image = Image { getImage :: ByteString }
               deriving (Eq, Show)
 
-
+sqlMapping :: HM.HashMap TypeRep [SQLType]
+sqlMapping =
+  HM.fromList
+  [ (typeOf (undefined :: CImage)    , [SQL_LONGVARBINARY])
+  , (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
+  , (typeOf (undefined :: CWchar)    , [SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
+  , (typeOf (undefined :: CText)     , [SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WCHAR, SQL_WVARCHAR])
+  , (typeOf (undefined :: CMoney)    , [SQL_DECIMAL])
+  , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
+  , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
+  , (typeOf (undefined :: CLong)     , [SQL_INTEGER])
+  , (typeOf (undefined :: CULong)    , [SQL_INTEGER])
+  , (typeOf (undefined :: CSmallInt) , [SQL_SMALLINT])
+  , (typeOf (undefined :: CUSmallInt), [SQL_SMALLINT])
+  , (typeOf (undefined :: CFloat)    , [SQL_REAL])
+  , (typeOf (undefined :: CDouble)   , [SQL_FLOAT])
+  , (typeOf (undefined :: CBool)     , [SQL_BIT])
+  , (typeOf (undefined :: CDate)     , [SQL_DATE, SQL_TYPE_DATE])
+  , (typeOf (undefined :: CBigInt)   , [SQL_BIGINT])
+  , (typeOf (undefined :: CUBigInt)  , [SQL_BIGINT])
+  , (typeOf (undefined :: CTimeOfDay), [SQL_TIME, SQL_SS_TIME2])
+  , (typeOf (undefined :: CLocalTime), [SQL_TIMESTAMP, SQL_TYPE_TIMESTAMP])
+  , (typeOf (undefined :: CZonedTime), [SQL_SS_TIMESTAMPOFFSET])
+  , (typeOf (undefined :: UUID)      , [SQL_GUID])
+  ]
+  
+  
+                
