@@ -123,8 +123,8 @@ _unit_sqlinsert = do
   print res
 
 
-_test_roundTrip :: TestTree
-_test_roundTrip =
+test_roundTrip :: TestTree
+test_roundTrip =
   testGroup "round trip tests"
   [ testProperty "maxBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 1 $ roundTrip (Gen.int $ Range.singleton $ minBound @Int)
