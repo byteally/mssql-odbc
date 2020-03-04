@@ -35,9 +35,12 @@ import Data.Fixed
 import qualified Data.HashMap.Strict as HM
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import Data.Functor.Compose
+import qualified Data.ByteString as B
 
 import qualified Data.String as S
+import Numeric
 
 data TestT1 = TestT1
   { test_id :: Int32
@@ -104,6 +107,18 @@ localConnectionStr =
 testConnectInfo :: ConnectInfo
 testConnectInfo = connectInfo localConnectionStr
 
+unit_text :: IO ()
+unit_text = do
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  Right con <- connect conInfo
+  let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb"
+  print "bbbbb test"
+  res <- query con ("select CAST ('" <> t1 <> "' AS VARCHAR(5000))") :: IO (Either SQLErrors (Vector (Identity ASCIIText)))
+  print res
+  disconnect con
+  pure ()
+
+
 unit_connect :: IO ()
 unit_connect = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
@@ -113,8 +128,9 @@ unit_connect = do
 
   print res
   case res1 :: Either SQLErrors (Vector (Identity Image)) of
-    Right vs        ->
-      mapM (BS.writeFile "/tmp/output.png" . getImage . runIdentity) vs >> pure ()
+    Right vs        -> do
+      print (length vs)
+      mapM (BSL.writeFile "/tmp/output" . getImage . runIdentity) vs >> pure ()
     Left es         -> print es
   disconnect con
   pure ()
@@ -153,8 +169,8 @@ test_roundTrip =
   , testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
   , testProperty "maxBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
 
-  , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
-  , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
+  -- , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
+  -- , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
   
   -- , testProperty "maxBound @Word" $ withTests 100 $ roundTrip r (Gen.word $ Range.singleton $ maxBound @Word)
   -- , testProperty "minBound @Word" $ withTests 100 $ roundTrip r (Gen.word $ Range.singleton $ minBound @Word)
@@ -177,7 +193,10 @@ test_roundTrip =
   , testProperty "@LocalTime" $ withTests 100 $ roundTrip r (localTime) -- OK
   , testProperty "@Float" $ withTests 100 $ roundTrip r (Gen.float $ Range.exponentialFloat (-100) 100) -- OK
   , testProperty "@Double" $ withTests 100 $ roundTrip r (Gen.double $ Range.exponentialFloat (-100) 100) -- OK
-  , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r asciiText getAsciiText
+  -- , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getAsciiText t) <> "'") 
+  -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
+  -- , testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 1 100000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
+  
     -- --hedgehog-replay "Size 0 Seed 16971920948893089903 7310332839496341167"
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $
@@ -186,19 +205,14 @@ test_roundTrip =
   ]
 
   where toMoney i64 = Money (read (show i64) / 10000)
-        toSmallMoney i32 = SmallMoney (read (show i32) / 10000)  
-
+        toSmallMoney i32 = SmallMoney (read (show i32) / 10000)
+        -- byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
+        doubleNull = BS.pack [0x0, 0x0]
+        
 asciiText :: MonadGen m => m ASCIIText
 asciiText =
-  (ASCIIText . T.pack . escapeQuotes) <$> Gen.list (Range.constant 0 1000) Gen.ascii
+  (ASCIIText . T.pack) <$> Gen.list (Range.constant 0 1000) Gen.alphaNum
 
-  where escapeQuotes =
-          foldr (\a acc -> case a of
-                    '\'' -> "''" <> acc
-                    _    -> a : acc
-                ) []
-  
-  
 day :: ( MonadGen m
       , GenBase m ~ Identity
       ) => m Day
@@ -299,7 +313,9 @@ getSQLType a = case show $ typeOf a of
   "Double"    -> ("FLOAT(53)", False)
   "Money"    -> ("MONEY", True)
   "SmallMoney" -> ("SMALLMONEY", True)  
-  "ASCIIText" -> ("VARCHAR", True)  
+  "ASCIIText" -> ("VARCHAR(5000)", False)
+  "Text" -> ("NTEXT", False)  
+  "ByteString" -> ("VARBINARY(5000)", False)  
   
 {-
   "Int8"   -> "TINYINT"

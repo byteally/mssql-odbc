@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Database.MsSQL.Internal.Ctx where
 
 import qualified Data.Map as Map

@@ -1,0 +1,11 @@
+compiler: ghc
+packages:
+  ./.
+
+source-repository-package
+    type: git
+    location: https://github.com/byteally/haskell-hedgehog.git
+    tag: 6142fce8a2838bbe1abbe740be2656e883a6467d 
+    subdir: hedgehog
+    
+tests: true

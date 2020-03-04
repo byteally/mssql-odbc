@@ -19,7 +19,7 @@
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE NamedFieldPuns             #-}
-
+{-# LANGUAGE RankNTypes                 #-}
 module Database.MsSQL.Internal
   ( module Database.MsSQL.Internal.SQLError
   , module Database.MsSQL.Internal
@@ -28,6 +28,7 @@ module Database.MsSQL.Internal
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BS8
 import Data.ByteString.Builder (Builder)
 import qualified Data.ByteString.Builder as BSB
@@ -68,6 +69,9 @@ import Data.Functor.Compose
 import Control.Applicative hiding ((<**>))
 import Data.Scientific
 import Data.Typeable
+import qualified Data.Text.Lazy.Builder as LTB
+import qualified Data.Text.Lazy as LT
+import GHC.TypeLits
 
 data ConnectParams = ConnectParams
                      T.Text
@@ -155,7 +159,7 @@ data HSTMT a = HSTMT
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
-  , ("SQLCHAR", [t|CChar|])
+  , ("SQLCHAR", [t|CChar|]) 
   , ("SQLHANDLE", [t|Ptr SQLHANDLE|])
   , ("SQLHENV" , [t|Ptr SQLHENV|])
   , ("SQLHDBC" , [t|Ptr SQLHDBC|])
@@ -570,21 +574,75 @@ isSuccessful SQL_SUCCESS           = True
 isSuccessful SQL_SUCCESS_WITH_INFO = True
 isSuccessful _                     = False
 
+extractVal :: Storable t => ColBufferType 'Bound t -> IO t
+extractVal cbuff = case cbuff of
+  BoundColBuffer _ cbuffPtr -> withForeignPtr cbuffPtr peek
 
-extractVal :: Storable t => ColBuffer t -> IO t
-extractVal cbuff = withForeignPtr (getColBuffer cbuff) peek
+extractWith ::
+  Storable t =>
+  ColBufferType 'Bound t ->
+  (CLong -> Ptr t -> IO b) ->
+  IO b
+extractWith cbuff f = case cbuff of
+  BoundColBuffer bufSizeFP cbuffPtr -> do
+    -- NOTE: what about errors?
+    bufSize <- peekFP bufSizeFP 
+    withForeignPtr cbuffPtr (f bufSize)
 
+castColBufferPtr ::
+  ColBufferType 'Bound t1 ->
+  ColBufferType 'Bound t2
+castColBufferPtr cbuff = case cbuff of
+  BoundColBuffer lenOrIndFP cbuffPtr ->
+    BoundColBuffer lenOrIndFP (castForeignPtr cbuffPtr)
+
+unboundWith :: 
+  Storable t =>
+  ColBufferType 'Unbound t ->
+  a ->
+  (CLong -> Ptr t -> a -> IO a) ->
+  IO a
+unboundWith cbuff a f =
+  case cbuff of
+    UnboundColBuffer k -> k a f
+
+{-    
 getLengthOrIndicator :: ColBuffer t -> IO (Either CLong ResIndicator)
 getLengthOrIndicator cb = do
   lenOrInd <- fromIntegral <$> (peekFP $ lengthOrIndicatorFP cb)
   pure $ case lenOrInd `elem` [SQL_NULL_DATA, SQL_NO_TOTAL] of
     True -> Right lenOrInd
     False -> Left $ fromIntegral lenOrInd
-                                                             
+-}
 
-data ColBuffer t = ColBuffer
-  { getColBuffer :: ForeignPtr t
-  , lengthOrIndicatorFP :: ForeignPtr CLong 
+data ColBufferTypeK =
+    Bound
+  | Unbound
+  
+data ColBufferType (k :: ColBufferTypeK) t where
+  BoundColBuffer   :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'Bound t
+  UnboundColBuffer :: (forall a. a -> (CLong -> Ptr t -> a -> IO a) -> IO a) -> ColBufferType 'Unbound t
+
+boundColBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'Bound t
+boundColBuffer = BoundColBuffer
+
+unboundColBuffer ::
+  (forall a. a -> (CLong -> Ptr t -> a -> IO a) -> IO a) ->
+  ColBufferType 'Unbound t
+unboundColBuffer = UnboundColBuffer
+
+type family GetColBufferType t where
+  GetColBufferType (CUnbound _) = 'Unbound
+  GetColBufferType _            = 'Bound
+
+newtype CUnbound a = CUnbound { getCUnbound :: a }
+                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+
+newtype CSized (size :: Nat) a = CSized { getCSized :: a }
+                              deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+
+newtype ColBuffer t = ColBuffer
+  { getColBuffer :: ColBufferType (GetColBufferType t) t
   }
   
 fetchRows :: HSTMT a -> IO r -> IO (Vector r, ResIndicator)
@@ -749,7 +807,7 @@ class ( SQLBindCol ((ColBuffer (FieldBufferType t)))
 
 instance FromField Int where
   type FieldBufferType Int = CBigInt
-  fromField = \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
   
 {-
 instance FromField Int8 where
@@ -759,15 +817,15 @@ instance FromField Int8 where
   
 instance FromField Int16 where
   type FieldBufferType Int16 = CSmallInt 
-  fromField = \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
 
 instance FromField Int32 where
   type FieldBufferType Int32 = CLong
-  fromField = \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
 
 instance FromField Int64 where
   type FieldBufferType Int64 = CBigInt
-  fromField = \i -> extractVal i >>= (\v -> pure $ coerce v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
 
 {-
 instance FromField Word where
@@ -777,7 +835,7 @@ instance FromField Word where
 
 instance FromField Word8 where
   type FieldBufferType Word8 = CUTinyInt
-  fromField = \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
 
 {-
 instance FromField Word16 where
@@ -795,64 +853,73 @@ instance FromField Word64 where
 
 instance FromField Double where
   type FieldBufferType Double = CDouble
-  fromField = \i -> extractVal i >>= (\v -> pure $ coerce v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
 
 instance FromField Float where
   type FieldBufferType Float = CFloat
-  fromField = \i -> extractVal i >>= (\v -> pure $ coerce v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
 
 instance FromField Bool where
   type FieldBufferType Bool = CBool
-  fromField = \i -> extractVal i >>= (\v -> pure $ if v == 1 then True else False)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ if v == 1 then True else False)
 
 newtype ASCIIText = ASCIIText { getAsciiText :: T.Text }
                   deriving (Show, Eq)
 
 instance FromField ASCIIText where
-  type FieldBufferType ASCIIText = CChar
+  type FieldBufferType ASCIIText = CUnbound CChar
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    withForeignPtr (getColBuffer v) $ \ccharP -> transform <$> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
+    bsb <- unboundWith (getColBuffer v) mempty $
+      \bufSize ccharP acc -> do
+        a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
+        pure (acc <> BSB.byteString a)
+    pure (ASCIIText . T.pack . BS8.unpack . LBS.toStrict $ BSB.toLazyByteString bsb)  
 
-    where transform = ASCIIText . T.pack . BS8.unpack
-  
 instance FromField ByteString where
-  type FieldBufferType ByteString = CChar
+  type FieldBufferType ByteString = CUnbound CBinary
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    withForeignPtr (getColBuffer v) $ \ccharP -> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
+    bsb <- unboundWith (getColBuffer v) mempty $
+      \bufSize ccharP acc -> do
+        a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
+        pure (acc <> BSB.byteString a)
+    pure (LBS.toStrict $ BSB.toLazyByteString bsb)
 
 instance FromField Image where
-  type FieldBufferType Image = CImage
+  type FieldBufferType Image = CUnbound CBinary
   fromField = \v -> do
-    _lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    let lengthOrIndicator = 29032 :: Int
-    withForeignPtr (castForeignPtr $ getColBuffer v) $ \ccharP -> Image <$> BS.packCStringLen (ccharP, fromIntegral lengthOrIndicator)
-    
+    bsb <- unboundWith (getColBuffer v) mempty $
+      \bufSize ccharP acc -> do
+        a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
+        pure (acc <> BSB.byteString a)
+    pure (coerce $ BSB.toLazyByteString bsb)
+
 instance FromField T.Text where
-  type FieldBufferType T.Text = CText
+  type FieldBufferType T.Text = CUnbound CWchar
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    let clen = round ((fromIntegral lengthOrIndicator :: Double)/2) :: Word
-    withForeignPtr (castForeignPtr $ getColBuffer v) $ \cwcharP -> T.fromPtr cwcharP (fromIntegral clen)
+    lzt <- unboundWith (getColBuffer v) mempty $
+      \bufSize cwcharP acc -> do
+        let clen = bufSize - 1 --  round ((fromIntegral bufSize :: Double)/2) :: Word
+        a <- T.fromPtr (coerce cwcharP) (fromIntegral clen)
+        pure (acc <> LTB.fromText a)
+    pure (LT.toStrict (LTB.toLazyText lzt))
 
 instance FromField Money where
   type FieldBufferType Money = CMoney
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    let clen = round ((fromIntegral lengthOrIndicator :: Double)/2) :: Word
-    withForeignPtr (castForeignPtr $ getColBuffer v) $ \cwcharP -> do
-      rawT <- T.fromPtr cwcharP (fromIntegral clen)
-      let res = readMaybe . T.unpack $ rawT
-      maybe (error $ "Parse failed for Money: " ++ show rawT)
+    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
+      -- let clen = round ((fromIntegral bufSize :: Double)/2) :: Word
+      a <- BS.packCStringLen (ccharP, fromIntegral bufSize)      
+      -- rawT <- T.fromPtr ccharP (fromIntegral clen)
+      print $ "X: Money: " ++ show a
+      let res = readMaybe . BS8.unpack $ a -- rawT
+      maybe (error $ "Parse failed for Money: " ++ show a {-rawT-})
             (pure . Money) res
 
 instance FromField SmallMoney where
   type FieldBufferType SmallMoney = CMoney
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    let clen = round ((fromIntegral lengthOrIndicator :: Double)/2) :: Word
-    withForeignPtr (castForeignPtr $ getColBuffer v) $ \cwcharP -> do
+    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
+      let clen = round ((fromIntegral bufSize :: Double)/2) :: Word      
       rawT <- T.fromPtr cwcharP (fromIntegral clen)
       let res = readMaybe . T.unpack $ rawT
       maybe (error $ "Parse failed for SmallMoney: " ++ show rawT)
@@ -860,19 +927,19 @@ instance FromField SmallMoney where
 
 instance FromField Day where
   type FieldBufferType Day = CDate
-  fromField = \i -> extractVal i >>= (\v -> pure $ getDate v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getDate v)
 
 instance FromField TimeOfDay where
   type FieldBufferType TimeOfDay = CTimeOfDay
-  fromField = \i -> extractVal i >>= (\v -> pure $ getTimeOfDay v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getTimeOfDay v)
 
 instance FromField LocalTime where
   type FieldBufferType LocalTime = CLocalTime
-  fromField = \i -> extractVal i >>= (\v -> pure $ getLocalTime v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getLocalTime v)
 
 instance FromField ZonedTime where
   type FieldBufferType ZonedTime = CZonedTime
-  fromField = \i -> extractVal i >>= (\v -> pure $ Database.MsSQL.Internal.SQLTypes.getZonedTime v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ Database.MsSQL.Internal.SQLTypes.getZonedTime v)
 
 instance FromField UTCTime where
   type FieldBufferType UTCTime = FieldBufferType ZonedTime
@@ -880,23 +947,28 @@ instance FromField UTCTime where
 
 instance FromField UUID where
   type FieldBufferType UUID = UUID
-  fromField = \i -> extractVal i
+  fromField = \i -> extractVal (getColBuffer i)
 
+-- NOTE: There is no generic lengthOrIndicatorFP
 instance FromField a => FromField (Maybe a) where
   type FieldBufferType (Maybe a) = FieldBufferType a
   fromField = \v -> do
-    lengthOrIndicator <- peekFP $ lengthOrIndicatorFP v
-    if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
-      then pure Nothing
-      else Just <$> (fromField v )
-
+    case getColBuffer v of
+      BoundColBuffer fptr _ -> do 
+        lengthOrIndicator <- peekFP fptr
+        if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
+          then pure Nothing
+          else Just <$> (fromField v)
+      UnboundColBuffer _ -> pure Nothing
+  
 instance FromField a => FromField (Identity a) where
   type FieldBufferType (Identity a) = FieldBufferType a
   fromField = \v ->
-      Identity <$> (fromField v )
+      Identity <$> (fromField v)
 
-coerceColBuffer :: (Coercible a b) => ColBuffer a -> ColBuffer b
-coerceColBuffer c = c {getColBuffer  = castForeignPtr $ getColBuffer c}
+-- TODO: Is coerceColBuffer necessary? is it same as castColBufferPtr?
+-- coerceColBuffer :: (Coercible a b) => ColBuffer a -> ColBuffer b
+-- coerceColBuffer c = c {getColBuffer  = castForeignPtr $ getColBuffer c}
 
 peekFP :: Storable t => ForeignPtr t -> IO t
 peekFP fp = withForeignPtr fp peek
@@ -923,118 +995,224 @@ sqlBindColTpl hstmt block = do
            exps        = maybe [] id (HM.lookup rep sqlMapping)
            rep         = typeOf (undefined :: t)
 
-newtype CImage = CImage CChar
-  deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+sqlBindColTplUnbound :: forall t. (Typeable t) =>
+                      HSTMT (ColBuffer (CUnbound t)) ->
+                      (Ptr SQLHSTMT -> ColDescriptor -> IO (Either SQLErrors (ColBuffer (CUnbound t)))) ->
+                      IO (Either SQLErrors (ColBuffer (CUnbound t)))
+sqlBindColTplUnbound hstmt block = do
+   let hstmtP = getHSTMT hstmt       
+   colDescE <- getCurrentColDescriptorAndMove hstmt
+   case colDescE of
+     Left e -> pure $ Left e
+     Right cdesc
+       | match cdesc -> block hstmtP cdesc
+       | otherwise   -> typeMismatch exps cdesc
+
+     where match cdesc = colDataType cdesc `elem` exps
+           exps        = maybe [] id (HM.lookup rep sqlMapping)
+           rep         = typeOf (undefined :: t)
+
+newtype CBinary = CBinary { getCBinary :: CChar }
+                deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
 
--- TODO: Test when  buffersize is less than col size, read is not failing and simply empty row are returning
-instance SQLBindCol (ColBuffer CImage) where
-  sqlBindCol hstmt =
-    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
-      let
-        cpos = colPosition cdesc
-        bufferLen = fromIntegral $ colSize cdesc + 1
-      putStrLn $ "Length: " ++ show bufferLen      
-      chrFP <- mallocForeignPtrBytes (fromIntegral bufferLen)
-      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
-      ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
-        [C.block| int {
-          SQLRETURN ret = 0;
-          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
-          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          SQLLEN bufferLen = $(SQLLEN bufferLen);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrp), bufferLen, lenOrInd);
-          return ret;
-        }|]
+instance SQLBindCol (ColBuffer (CUnbound CBinary)) where
+  sqlBindCol hstmt = 
+   sqlBindColTplUnbound hstmt block
+   
+     where block hstmtP cdesc = do
+             let bufSize = fromIntegral (20 :: Int)
+             binFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
+             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+             let cpos = colPosition cdesc
+                 cbuf = unboundColBuffer (\acc f ->
+                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)
+                        
+             pure $ pure $ (ColBuffer cbuf)
 
-      case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (coerce chrFP) lenOrIndFP)
-        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
+           fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f = go
+           
+             where go acc = do
+                     ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
+                      [C.block| int {
+                        SQLRETURN ret = 0;
+                        SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+                        SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+                        ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQLCHAR* binP), $(SQLLEN bufSize), lenOrInd);
+                        return ret;
+                      }|]
+                     case isSuccessful ret of
+                       True -> do
+                           lengthOrInd <- peekFP lenOrIndFP
+                           let actBufSize = case fromIntegral lengthOrInd of
+                                              SQL_NO_TOTAL                 -> bufSize
+                                              i | i >= fromIntegral bufSize -> bufSize
+                                              _                            -> lengthOrInd                                              
+                           acc' <- withForeignPtr binFP $ \tptr -> f actBufSize (coerce tptr) acc
+                           go acc'
+                       False -> pure acc
 
--- TODO: Test when  buffersize is less than col size, read is not failing and simply empty row are returning
+instance SQLBindCol (ColBuffer (CUnbound CChar)) where
+  sqlBindCol hstmt = 
+   sqlBindColTplUnbound hstmt block
+   
+     where block hstmtP cdesc = do
+             let bufSize = fromIntegral (20 :: Int)
+             chrFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
+             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+             let cpos = colPosition cdesc
+                 cbuf = unboundColBuffer (\acc f ->
+                                               fetchBytes hstmtP chrFP lenOrIndFP bufSize cpos f acc)
+                        
+             pure $ pure $ (ColBuffer cbuf)
+
+           fetchBytes hstmtP chrFP lenOrIndFP bufSize cpos f = go
+           
+             where go acc = do
+                     ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrP -> do
+                      [C.block| int {
+                        SQLRETURN ret = 0;
+                        SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+                        SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+                        ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrP), $(SQLLEN bufSize), lenOrInd);
+                        return ret;
+                      }|]
+                     case isSuccessful ret of
+                       True -> do
+                           lengthOrInd <- peekFP lenOrIndFP
+                           let actBufSize = case fromIntegral lengthOrInd of
+                                              SQL_NO_TOTAL                 -> bufSize - 1
+                                              i | i > fromIntegral bufSize -> bufSize - 1
+                                              _                            -> lengthOrInd
+                           acc' <- withForeignPtr chrFP $ \tptr -> f actBufSize (coerce tptr) acc
+                           go acc'
+                       False -> pure acc
+
+
+-- TODO: Test when buffersize is less than col size, read is not failing and simply empty row are returning
 instance SQLBindCol (ColBuffer CChar) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufferLen = fromIntegral $ colSize cdesc + 1
-      chrFP <- mallocForeignPtrBytes (fromIntegral bufferLen)
+        bufSize = fromIntegral $ colSize cdesc + 1
+      chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
         [C.block| int {
           SQLRETURN ret = 0;
           SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
           SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          SQLLEN bufferLen = $(SQLLEN bufferLen);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrp), bufferLen, lenOrInd);
+          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrp), $(SQLLEN bufSize), lenOrInd);
           return ret;
         }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer chrFP lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP chrFP) )
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-        
+
+instance SQLBindCol (ColBuffer CBinary) where
+  sqlBindCol hstmt =
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
+      let
+        cpos = colPosition cdesc
+        bufSize = fromIntegral $ colSize cdesc + 1
+      binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+      ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
+        [C.block| int {
+          SQLRETURN ret = 0;
+          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQLCHAR* binP), $(SQLLEN bufSize), lenOrInd);
+          return ret;
+        }|]
+
+      case isSuccessful ret of
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP (coerce binFP)))
+        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
+
 instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
-      txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
+          bufSize = fromIntegral $ colSize cdesc + 1
+      txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
         [C.block| int {
           SQLRETURN ret = 0;
           SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
           SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), 100, lenOrInd);
+          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), $(SQLLEN bufSize), lenOrInd);
           return ret;
         }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (coerce txtFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce txtFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
-newtype CText = CText CWchar
-  deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+instance SQLBindCol (ColBuffer (CUnbound CWchar)) where
+  sqlBindCol hstmt = 
+   sqlBindColTplUnbound hstmt block
+   
+     where block hstmtP cdesc = do
+             let bufSize = fromIntegral (20 :: Int)
+             txtFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
+             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+             let cpos = colPosition cdesc
+                 cbuf = unboundColBuffer (\acc f ->
+                                               fetchText hstmtP txtFP lenOrIndFP bufSize cpos f acc)
+                        
+             pure $ pure $ (ColBuffer cbuf)
 
-instance SQLBindCol (ColBuffer CText) where
-  sqlBindCol hstmt =
-    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
-      let cpos = colPosition cdesc
-      txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
-      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
-      ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
-        [C.block| int {
-          SQLRETURN ret = 0;
-          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
-          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), 100, lenOrInd);
-          return ret;
-        }|]
+           fetchText hstmtP txtFP lenOrIndFP bufSize cpos f = go
+           
+             where go acc = do
+                     ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
+                      [C.block| int {
+                        SQLRETURN ret = 0;
+                        SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+                        SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+                        ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), $(SQLLEN bufSize), lenOrInd);
+                        return ret;
+                      }|]
+                     case isSuccessful ret of
+                       True -> do
+                           lengthOrInd <- peekFP lenOrIndFP
+                           let actBufSize = case fromIntegral lengthOrInd of
+                                              SQL_NO_TOTAL -> bufSize - 2
+                                              _            -> lengthOrInd                                              
+                           acc' <- withForeignPtr txtFP $ \tptr -> f actBufSize (coerce tptr) acc
+                           go acc'
+                       False -> pure acc
 
-      case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (coerce txtFP) lenOrIndFP)
-        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
-
-newtype CMoney = CMoney CWchar
+-- NOTE: CMoney should be CDecimal
+newtype CMoney = CMoney CChar
   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
 instance SQLBindCol (ColBuffer CMoney) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
-      txtFP <- mallocForeignPtrBytes 100 -- TODO: Get the length from col prop
+          bufSize = fromIntegral (colSize cdesc)
+      monFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
-      ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
+      ret <- fmap ResIndicator $ withForeignPtr monFP $ \monP -> do
         [C.block| int {
           SQLRETURN ret = 0;
           SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
           SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), 100, lenOrInd);
+          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* monP), $(SQLLEN bufSize), lenOrInd);
           return ret;
         }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (coerce txtFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce monFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 newtype CUTinyInt = CUTinyInt CUChar
@@ -1056,7 +1234,8 @@ instance SQLBindCol (ColBuffer CUTinyInt) where
          }|]
 
         case isSuccessful ret of
-          True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
+          True -> do
+            pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ castForeignPtr chrFP))
           False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 
@@ -1079,7 +1258,8 @@ instance SQLBindCol (ColBuffer CTinyInt) where
         }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ castForeignPtr chrFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CLong) where
@@ -1098,7 +1278,8 @@ instance SQLBindCol (ColBuffer CLong) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer intFP lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP intFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CULong) where
@@ -1117,7 +1298,8 @@ instance SQLBindCol (ColBuffer CULong) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer intFP lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP intFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 newtype CSmallInt = CSmallInt CShort
@@ -1139,7 +1321,8 @@ instance SQLBindCol (ColBuffer CSmallInt) where
         }|]
 
        case isSuccessful ret of
-         True -> pure $ Right (ColBuffer (coerce shortFP) lenOrIndFP)
+         True -> do
+           pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce shortFP))
          False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 newtype CUSmallInt = CUSmallInt CShort
@@ -1161,7 +1344,8 @@ instance SQLBindCol (ColBuffer CUSmallInt) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (coerce shortFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce shortFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CFloat) where
@@ -1180,7 +1364,8 @@ instance SQLBindCol (ColBuffer CFloat) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer floatFP lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP floatFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CDouble) where
@@ -1199,7 +1384,8 @@ instance SQLBindCol (ColBuffer CDouble) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer floatFP lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP floatFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CBool) where
@@ -1218,7 +1404,8 @@ instance SQLBindCol (ColBuffer CBool) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (castForeignPtr chrFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ castForeignPtr chrFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CDate) where
@@ -1238,7 +1425,8 @@ instance SQLBindCol (ColBuffer CDate) where
 
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (dateFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP dateFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 newtype CBigInt = CBigInt CLLong
@@ -1260,7 +1448,8 @@ instance SQLBindCol (ColBuffer CBigInt) where
        }|]
 
       case isSuccessful ret of
-        True -> pure $ Right (ColBuffer (coerce llongFP) lenOrIndFP)
+        True -> do
+          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce llongFP))
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 newtype CUBigInt = CUBigInt CULLong
@@ -1282,7 +1471,8 @@ instance SQLBindCol (ColBuffer CUBigInt) where
       }|]
 
      case isSuccessful ret of
-       True -> pure $ Right (ColBuffer (coerce llongFP) lenOrIndFP)
+       True -> do
+         pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce llongFP))
        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 
@@ -1302,7 +1492,8 @@ instance SQLBindCol (ColBuffer CTimeOfDay) where
       }|]
 
      case isSuccessful ret of
-       True -> pure $ Right (ColBuffer (todFP) lenOrIndFP)
+       True -> do
+         pure $ Right (ColBuffer (boundColBuffer lenOrIndFP todFP))
        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
         
 instance SQLBindCol (ColBuffer CLocalTime) where
@@ -1322,7 +1513,8 @@ instance SQLBindCol (ColBuffer CLocalTime) where
         }|]
 
        case isSuccessful ret of
-         True -> pure $ Right (ColBuffer (ltimeFP) lenOrIndFP)
+         True -> do
+           pure $ Right (ColBuffer (boundColBuffer lenOrIndFP ltimeFP))
          False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CZonedTime) where
@@ -1341,7 +1533,8 @@ instance SQLBindCol (ColBuffer CZonedTime) where
       }|]
 
      case isSuccessful ret of
-       True -> pure $ Right (ColBuffer (ltimeFP) lenOrIndFP)
+       True -> do
+         pure $ Right (ColBuffer (boundColBuffer lenOrIndFP ltimeFP))
        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer UUID) where
@@ -1360,7 +1553,8 @@ instance SQLBindCol (ColBuffer UUID) where
       }|]
 
      case isSuccessful ret of
-       True -> pure $ Right (ColBuffer (uuidFP) lenOrIndFP)
+       True -> do
+         pure $ Right (ColBuffer (boundColBuffer lenOrIndFP uuidFP))
        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 typeMismatch :: (Applicative m) => [SQLType] -> ColDescriptor -> m (Either SQLErrors a)
@@ -1913,16 +2107,16 @@ instance Show SmallMoney where
   show (SmallMoney s) =
     formatScientific Fixed (Just 4) s
 
-newtype Image = Image { getImage :: ByteString }
+newtype Image = Image { getImage :: LBS.ByteString }
               deriving (Eq, Show)
 
 sqlMapping :: HM.HashMap TypeRep [SQLType]
 sqlMapping =
   HM.fromList
-  [ (typeOf (undefined :: CImage)    , [SQL_LONGVARBINARY])
-  , (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
-  , (typeOf (undefined :: CWchar)    , [SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
-  , (typeOf (undefined :: CText)     , [SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WCHAR, SQL_WVARCHAR])
+  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
+  , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
+  , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
+  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY])  
   , (typeOf (undefined :: CMoney)    , [SQL_DECIMAL])
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
@@ -1944,3 +2138,11 @@ sqlMapping =
   
   
                 
+{-
+
+- segfault issue
+- right associativeness of <>
+- sized variants
+- extractWith errors
+
+-}
