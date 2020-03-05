@@ -72,6 +72,7 @@ import Data.Typeable
 import qualified Data.Text.Lazy.Builder as LTB
 import qualified Data.Text.Lazy as LT
 import GHC.TypeLits
+-- import Foreign.Marshal.Utils (fillBytes)
 
 data ConnectParams = ConnectParams
                      T.Text
@@ -155,6 +156,7 @@ newtype ColPos = ColPos (IORef CUShort)
 data HSTMT a = HSTMT
   { getHSTMT :: Ptr SQLHSTMT
   , colPos   :: ColPos
+  , colSizeAdjustment :: CLong -> CLong
   } deriving Functor
 
 C.context $ mssqlCtx
@@ -423,7 +425,7 @@ allocHSTMT con = do
       True -> do
         hstmt <- peek hstmtp
         cpos <- initColPos
-        pure $ Right $ HSTMT hstmt cpos
+        pure $ Right $ HSTMT hstmt cpos id
   where
     hdbc = _hdbc con
 
@@ -586,15 +588,19 @@ extractWith ::
 extractWith cbuff f = case cbuff of
   BoundColBuffer bufSizeFP cbuffPtr -> do
     -- NOTE: what about errors?
-    bufSize <- peekFP bufSizeFP 
+    bufSize <- peekFP bufSizeFP
     withForeignPtr cbuffPtr (f bufSize)
 
 castColBufferPtr ::
-  ColBufferType 'Bound t1 ->
-  ColBufferType 'Bound t2
+  (Coercible t1 t2) =>
+  ColBufferType bt t1 ->
+  ColBufferType bt t2
 castColBufferPtr cbuff = case cbuff of
   BoundColBuffer lenOrIndFP cbuffPtr ->
     BoundColBuffer lenOrIndFP (castForeignPtr cbuffPtr)
+  UnboundColBuffer k ->
+    UnboundColBuffer (\a accf -> k a $
+                       \l -> accf l . castPtr)
 
 unboundWith :: 
   Storable t =>
@@ -605,15 +611,6 @@ unboundWith ::
 unboundWith cbuff a f =
   case cbuff of
     UnboundColBuffer k -> k a f
-
-{-    
-getLengthOrIndicator :: ColBuffer t -> IO (Either CLong ResIndicator)
-getLengthOrIndicator cb = do
-  lenOrInd <- fromIntegral <$> (peekFP $ lengthOrIndicatorFP cb)
-  pure $ case lenOrInd `elem` [SQL_NULL_DATA, SQL_NO_TOTAL] of
-    True -> Right lenOrInd
-    False -> Left $ fromIntegral lenOrInd
--}
 
 data ColBufferTypeK =
     Bound
@@ -643,7 +640,7 @@ newtype CSized (size :: Nat) a = CSized { getCSized :: a }
 
 newtype ColBuffer t = ColBuffer
   { getColBuffer :: ColBufferType (GetColBufferType t) t
-  }
+  } 
   
 fetchRows :: HSTMT a -> IO r -> IO (Vector r, ResIndicator)
 fetchRows hstmt rowP = do
@@ -714,6 +711,7 @@ query = queryWith fromRow
 
 queryWith :: forall r.RowParser r -> Connection -> Query -> IO (Either SQLErrors (Vector r))
 queryWith (RowParser colBuf rowPFun) con q = do
+  print $ "Running query" ++ show q
   withHSTMT con $ \hstmt -> do
     resE <- sqldirect con (getHSTMT hstmt) q
     case resE of
@@ -765,7 +763,7 @@ field = RowParser
         fromField
 
 restmt :: forall a b. HSTMT a -> HSTMT b
-restmt (HSTMT stm cp) = HSTMT stm cp :: HSTMT b
+restmt (HSTMT stm cp f) = HSTMT stm cp f :: HSTMT b
 
 class FromRow t where
   fromRow :: RowParser t
@@ -904,26 +902,18 @@ instance FromField T.Text where
     pure (LT.toStrict (LTB.toLazyText lzt))
 
 instance FromField Money where
-  type FieldBufferType Money = CMoney
+  type FieldBufferType Money = CDecimal CChar
   fromField = \v -> do
-    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
-      -- let clen = round ((fromIntegral bufSize :: Double)/2) :: Word
-      a <- BS.packCStringLen (ccharP, fromIntegral bufSize)      
-      -- rawT <- T.fromPtr ccharP (fromIntegral clen)
-      print $ "X: Money: " ++ show a
-      let res = readMaybe . BS8.unpack $ a -- rawT
-      maybe (error $ "Parse failed for Money: " ++ show a {-rawT-})
-            (pure . Money) res
-
+    bs <- extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
+        BS.packCStringLen (ccharP, fromIntegral bufSize)
+    let res = BS8.unpack bs
+    maybe (error $ "Parse failed for Money: " ++ show res)
+          (pure . Money) (readMaybe $ res)
+      
 instance FromField SmallMoney where
-  type FieldBufferType SmallMoney = CMoney
+  type FieldBufferType SmallMoney = CDecimal CDouble
   fromField = \v -> do
-    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
-      let clen = round ((fromIntegral bufSize :: Double)/2) :: Word      
-      rawT <- T.fromPtr cwcharP (fromIntegral clen)
-      let res = readMaybe . T.unpack $ rawT
-      maybe (error $ "Parse failed for SmallMoney: " ++ show rawT)
-            (pure . SmallMoney) res
+    extractVal (castColBufferPtr (getColBuffer v) :: ColBufferType 'Bound CDouble) >>= (pure . SmallMoney . fromFloatDigits)
 
 instance FromField Day where
   type FieldBufferType Day = CDate
@@ -931,8 +921,12 @@ instance FromField Day where
 
 instance FromField TimeOfDay where
   type FieldBufferType TimeOfDay = CTimeOfDay
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getTimeOfDay v)
-
+  fromField = \i -> do
+    extractWith (getColBuffer i) $ \sz v -> do
+      print $ "SIZE: " ++ show sz
+      v' <- peek v
+      pure $ getTimeOfDay v'
+      
 instance FromField LocalTime where
   type FieldBufferType LocalTime = CLocalTime
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getLocalTime v)
@@ -1082,20 +1076,19 @@ instance SQLBindCol (ColBuffer (CUnbound CChar)) where
                            lengthOrInd <- peekFP lenOrIndFP
                            let actBufSize = case fromIntegral lengthOrInd of
                                               SQL_NO_TOTAL                 -> bufSize - 1
-                                              i | i > fromIntegral bufSize -> bufSize - 1
+                                              i | i >= fromIntegral bufSize -> bufSize - 1
                                               _                            -> lengthOrInd
                            acc' <- withForeignPtr chrFP $ \tptr -> f actBufSize (coerce tptr) acc
                            go acc'
                        False -> pure acc
 
 
--- TODO: Test when buffersize is less than col size, read is not failing and simply empty row are returning
 instance SQLBindCol (ColBuffer CChar) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufSize = fromIntegral $ colSize cdesc + 1
+        bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
       chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
@@ -1108,8 +1101,7 @@ instance SQLBindCol (ColBuffer CChar) where
         }|]
 
       case isSuccessful ret of
-        True -> do
-          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP chrFP) )
+        True -> pure $ Right (ColBuffer (boundColBuffer lenOrIndFP chrFP) )
         False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
 
 instance SQLBindCol (ColBuffer CBinary) where
@@ -1117,7 +1109,7 @@ instance SQLBindCol (ColBuffer CBinary) where
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufSize = fromIntegral $ colSize cdesc + 1
+        bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc))
       binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
@@ -1138,7 +1130,7 @@ instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
-          bufSize = fromIntegral $ colSize cdesc + 1
+          bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
       txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
@@ -1190,30 +1182,26 @@ instance SQLBindCol (ColBuffer (CUnbound CWchar)) where
                            go acc'
                        False -> pure acc
 
--- NOTE: CMoney should be CDecimal
-newtype CMoney = CMoney CChar
+newtype CDecimal a = CDecimal a
   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
-instance SQLBindCol (ColBuffer CMoney) where
-  sqlBindCol hstmt =
-    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
-      let cpos = colPosition cdesc
-          bufSize = fromIntegral (colSize cdesc)
-      monFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
-      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
-      ret <- fmap ResIndicator $ withForeignPtr monFP $ \monP -> do
-        [C.block| int {
-          SQLRETURN ret = 0;
-          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
-          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* monP), $(SQLLEN bufSize), lenOrInd);
-          return ret;
-        }|]
+instance SQLBindCol (ColBuffer (CDecimal CDouble)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CDouble))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
 
-      case isSuccessful ret of
-        True -> do
-          pure $ Right (ColBuffer (boundColBuffer lenOrIndFP $ coerce monFP))
-        False -> Left <$> getErrors ret (SQLSTMTRef hstmtP)
+instance SQLBindCol (ColBuffer (CDecimal CFloat)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CFloat))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+instance SQLBindCol (ColBuffer (CDecimal CChar)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce (adjustColSize (+2) hstmt) :: HSTMT (ColBuffer CChar))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+adjustColSize :: (CLong -> CLong) -> HSTMT a -> HSTMT a
+adjustColSize f hstmt = hstmt { colSizeAdjustment = (f . colSizeAdjustment hstmt) }
 
 newtype CUTinyInt = CUTinyInt CUChar
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -1480,12 +1468,14 @@ instance SQLBindCol (ColBuffer CTimeOfDay) where
   sqlBindCol hstmt = do
    sqlBindColTpl hstmt $ \hstmtP cdesc -> do    
      let cpos = colPosition cdesc
-     todFP <- mallocForeignPtr
+     todFP <- mallocForeignPtr 
      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
      ret <- fmap ResIndicator $ withForeignPtr todFP $ \todP -> do
+      -- fillBytes todP 0x0 14
       [C.block| int {
           SQLRETURN ret = 0;
           SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+          SQLLEN bufSize = sizeof(SQL_SS_TIME2_STRUCT);
           SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
           ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQL_SS_TIME2_STRUCT* todP), sizeof(SQL_SS_TIME2_STRUCT), lenOrInd);
           return ret;
@@ -2113,19 +2103,18 @@ newtype Image = Image { getImage :: LBS.ByteString }
 sqlMapping :: HM.HashMap TypeRep [SQLType]
 sqlMapping =
   HM.fromList
-  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
+  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL])
   , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
   , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
   , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY])  
-  , (typeOf (undefined :: CMoney)    , [SQL_DECIMAL])
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
   , (typeOf (undefined :: CLong)     , [SQL_INTEGER])
   , (typeOf (undefined :: CULong)    , [SQL_INTEGER])
   , (typeOf (undefined :: CSmallInt) , [SQL_SMALLINT])
   , (typeOf (undefined :: CUSmallInt), [SQL_SMALLINT])
-  , (typeOf (undefined :: CFloat)    , [SQL_REAL])
-  , (typeOf (undefined :: CDouble)   , [SQL_FLOAT])
+  , (typeOf (undefined :: CFloat)    , [SQL_REAL, SQL_DECIMAL])
+  , (typeOf (undefined :: CDouble)   , [SQL_FLOAT, SQL_DECIMAL])
   , (typeOf (undefined :: CBool)     , [SQL_BIT])
   , (typeOf (undefined :: CDate)     , [SQL_DATE, SQL_TYPE_DATE])
   , (typeOf (undefined :: CBigInt)   , [SQL_BIGINT])
@@ -2144,5 +2133,8 @@ sqlMapping =
 - right associativeness of <>
 - sized variants
 - extractWith errors
+- constraint checks in Database instance turned off. turn it back on
+- CheckCT not necessary to be captured
+
 
 -}

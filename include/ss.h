@@ -1,3 +1,10 @@
+#ifndef SQL_C_SS_TIME2
+#define SQL_C_SS_TIME2	(0x4000)
+#endif
+
+#ifndef SQL_C_SS_TIMESTAMPOFFSET
+#define SQL_C_SS_TIMESTAMPOFFSET	(0x4001)
+#endif
 
 #define SQL_SS_TIME2                        (-154)
 #define SQL_SS_TIMESTAMPOFFSET              (-155)

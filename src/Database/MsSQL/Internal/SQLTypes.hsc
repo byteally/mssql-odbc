@@ -61,7 +61,7 @@ instance Storable CTimeOfDay where
     hour <- #{peek SQL_SS_TIME2_STRUCT, hour} ptr :: IO CUShort
     minute <- #{peek SQL_SS_TIME2_STRUCT, minute} ptr :: IO CUShort
     second <- #{peek SQL_SS_TIME2_STRUCT, second} ptr :: IO CUShort
-    nanosecond <- #{peek SQL_SS_TIME2_STRUCT, fraction} ptr :: IO CULong
+    nanosecond <- #{peek SQL_SS_TIME2_STRUCT, fraction} ptr :: IO CUInt
     pure $ CTimeOfDay (TimeOfDay
                        { todHour = fromIntegral hour
                        , todMin = fromIntegral minute
@@ -121,8 +121,8 @@ instance Storable CZonedTime where
     minute <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, minute} ptr :: IO CUShort
     second <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, second} ptr :: IO CUShort
     nanosecond <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, fraction} ptr :: IO CUInt
-    tzHour <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, timezone_hour} ptr :: IO CUShort
-    tzMinute <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, timezone_minute} ptr :: IO CUShort
+    tzHour <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, timezone_hour} ptr :: IO CShort
+    tzMinute <- #{peek SQL_SS_TIMESTAMPOFFSET_STRUCT, timezone_minute} ptr :: IO CShort
     pure $ CZonedTime $ ZonedTime
       { zonedTimeToLocalTime= LocalTime
                               { localDay = (fromGregorian (toInteger yr) (fromIntegral mon) (fromIntegral dy))

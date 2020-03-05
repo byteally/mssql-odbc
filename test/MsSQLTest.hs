@@ -107,20 +107,69 @@ localConnectionStr =
 testConnectInfo :: ConnectInfo
 testConnectInfo = connectInfo localConnectionStr
 
-unit_text :: IO ()
-unit_text = do
+_unit_text :: IO ()
+_unit_text = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
   Right con <- connect conInfo
-  let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb"
+  let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   print "bbbbb test"
   res <- query con ("select CAST ('" <> t1 <> "' AS VARCHAR(5000))") :: IO (Either SQLErrors (Vector (Identity ASCIIText)))
   print res
   disconnect con
   pure ()
 
+_unit_timeOfDay :: IO ()
+_unit_timeOfDay = do
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  Right con <- connect conInfo
+  --let -- s = "'00:00:00'"  
+      -- t1 = read s :: TimeOfDay
+      -- "select CAST ('" <> (T.pack $ show t1) <> "' AS TIME)
+            
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print  
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print  
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  
+  disconnect con
+  pure ()
 
-unit_connect :: IO ()
-unit_connect = do
+
+
+_unit_connect :: IO ()
+_unit_connect = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
   Right con <- connect conInfo
   res <- query con "select * from Album" :: IO (Either SQLErrors (Vector Album))
@@ -154,8 +203,8 @@ test_roundTrip =
   [ testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ minBound @Int)
   
-  -- -- , testProperty "maxBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ maxBound @Int8)
-  -- -- , testProperty "minBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ minBound @Int8)
+  -- , testProperty "maxBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ maxBound @Int8)
+  -- , testProperty "minBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ minBound @Int8)
 
   , testProperty "maxBound @Int16" $ withTests 100 $ roundTrip r (Gen.int16 $ Range.singleton $ maxBound @Int16)
   , testProperty "minBound @Int16" $ withTests 100 $ roundTrip r (Gen.int16 $ Range.singleton $ minBound @Int16)
@@ -166,11 +215,11 @@ test_roundTrip =
   , testProperty "maxBound @Int64" $ withTests 100 $ roundTrip r (Gen.int64 $ Range.singleton $ maxBound @Int64)
   , testProperty "minBound @Int64" $ withTests 100 $ roundTrip r (Gen.int64 $ Range.singleton $ minBound @Int64)
 
-  , testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
+    testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
   , testProperty "maxBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
 
-  -- , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
-  -- , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
+  , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
+  , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
   
   -- , testProperty "maxBound @Word" $ withTests 100 $ roundTrip r (Gen.word $ Range.singleton $ maxBound @Word)
   -- , testProperty "minBound @Word" $ withTests 100 $ roundTrip r (Gen.word $ Range.singleton $ minBound @Word)
@@ -189,15 +238,19 @@ test_roundTrip =
 
   , testProperty "@Bool" $ roundTrip r ((\b -> if b then 1 else 0 :: Word8) <$> Gen.bool) -- OK
   , testProperty "@Day" $ withTests 100 $ roundTrip r (day) -- OK
-  , testProperty "@TimeOfDay" $ withTests 100 $ roundTrip r (timeOfDay)
-  , testProperty "@LocalTime" $ withTests 100 $ roundTrip r (localTime) -- OK
+  , testProperty "@TimeOfDay" $ withTests 100 $ roundTrip r timeOfDay
+  , testProperty "@LocalTime" $ withTests 100 $ roundTrip r localTime
+  , testProperty "@ZonedTime" $ withTests 100 $ roundTripWith r zonedTime ppZonedTime
+  
   , testProperty "@Float" $ withTests 100 $ roundTrip r (Gen.float $ Range.exponentialFloat (-100) 100) -- OK
   , testProperty "@Double" $ withTests 100 $ roundTrip r (Gen.double $ Range.exponentialFloat (-100) 100) -- OK
-  -- , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getAsciiText t) <> "'") 
-  -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-  -- , testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 1 100000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
+  , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
-    -- --hedgehog-replay "Size 0 Seed 16971920948893089903 7310332839496341167"
+  , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getAsciiText t) <> "'")  
+  , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
+  , testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 1 100000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
+  
+  --   -- --hedgehog-replay "Size 0 Seed 16971920948893089903 7310332839496341167"
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $
         query_ "select CAST ( -100.0 AS FLOAT(53))"
@@ -208,6 +261,22 @@ test_roundTrip =
         toSmallMoney i32 = SmallMoney (read (show i32) / 10000)
         -- byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
         doubleNull = BS.pack [0x0, 0x0]
+        ppMaybe a = case a of
+                      Nothing -> "null"
+                      Just v  -> T.pack $ show v
+        ppZonedTime (ZonedTime lt tz) =
+          T.pack $ show lt <> " " <> ppTz tz
+
+ppTz :: TimeZone -> String
+ppTz (TimeZone tzms _ _) =
+  let hrs = posTzms `div` 60
+      mins = posTzms `mod` 60
+      (sign, posTzms) = if tzms < 0
+                        then (False, (-1) * tzms)
+                        else (True, tzms)
+      ppSign True  = "+"
+      ppSign False = "-"
+  in  ppSign sign <> show hrs <> ":" <> if mins < 10 then "0" <> show mins else show mins
         
 asciiText :: MonadGen m => m ASCIIText
 asciiText =
@@ -243,6 +312,21 @@ localTime = do
   dy <- day
   tod <- timeOfDay
   pure $ LocalTime dy tod
+
+timeZone :: ( MonadGen m
+             , GenBase m ~ Identity
+             ) => m TimeZone
+timeZone = do
+  tzms <- Gen.enum (-720) 720
+  sOnly <- Gen.bool
+  tzn <- Gen.element ["UTC", "UT", "GMT", "EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT"]
+  pure (TimeZone tzms sOnly tzn)
+  
+
+zonedTime :: ( MonadGen m
+             , GenBase m ~ Identity
+             ) => m ZonedTime
+zonedTime = ZonedTime <$> localTime <*> timeZone
 
 roundTrip :: forall a.
   ( Show a
@@ -315,7 +399,9 @@ getSQLType a = case show $ typeOf a of
   "SmallMoney" -> ("SMALLMONEY", True)  
   "ASCIIText" -> ("VARCHAR(5000)", False)
   "Text" -> ("NTEXT", False)  
-  "ByteString" -> ("VARBINARY(5000)", False)  
+  "ByteString" -> ("VARBINARY(5000)", False)
+  "Maybe Double" -> ("FLOAT(53)", False)
+  "ZonedTime" -> ("datetimeoffset", True)
   
 {-
   "Int8"   -> "TINYINT"
@@ -324,3 +410,7 @@ getSQLType a = case show $ typeOf a of
   "Word32" -> "NUMERIC(10,0)"
   "Word64" -> "NUMERIC(20,0)"
 -}
+
+-- NOTE: orphan instance for equality
+instance Eq ZonedTime where
+  (ZonedTime t1 tz1) == (ZonedTime t2 tz2) = t1 == t2 && ppTz tz1 == ppTz tz2
