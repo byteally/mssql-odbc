@@ -215,7 +215,7 @@ test_roundTrip =
   , testProperty "maxBound @Int64" $ withTests 100 $ roundTrip r (Gen.int64 $ Range.singleton $ maxBound @Int64)
   , testProperty "minBound @Int64" $ withTests 100 $ roundTrip r (Gen.int64 $ Range.singleton $ minBound @Int64)
 
-    testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
+  , testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
   , testProperty "maxBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
 
   , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
@@ -259,7 +259,7 @@ test_roundTrip =
 
   where toMoney i64 = Money (read (show i64) / 10000)
         toSmallMoney i32 = SmallMoney (read (show i32) / 10000)
-        -- byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
+        byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
         doubleNull = BS.pack [0x0, 0x0]
         ppMaybe a = case a of
                       Nothing -> "null"

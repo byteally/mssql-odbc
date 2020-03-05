@@ -711,7 +711,6 @@ query = queryWith fromRow
 
 queryWith :: forall r.RowParser r -> Connection -> Query -> IO (Either SQLErrors (Vector r))
 queryWith (RowParser colBuf rowPFun) con q = do
-  print $ "Running query" ++ show q
   withHSTMT con $ \hstmt -> do
     resE <- sqldirect con (getHSTMT hstmt) q
     case resE of
@@ -922,8 +921,7 @@ instance FromField Day where
 instance FromField TimeOfDay where
   type FieldBufferType TimeOfDay = CTimeOfDay
   fromField = \i -> do
-    extractWith (getColBuffer i) $ \sz v -> do
-      print $ "SIZE: " ++ show sz
+    extractWith (getColBuffer i) $ \_ v -> do
       v' <- peek v
       pure $ getTimeOfDay v'
       
