@@ -108,6 +108,16 @@ localConnectionStr =
 testConnectInfo :: ConnectInfo
 testConnectInfo = connectInfo localConnectionStr
 
+unit_ascii :: IO ()
+unit_ascii = do
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  Right con <- connect conInfo
+  print "ascii test"
+  res <- query con "select CAST ('LPN' AS VARCHAR), CAST ('LPN' AS VARCHAR)" :: IO (Either SQLErrors (Vector ((ASCIIText, ASCIIText))))
+  print res
+  disconnect con
+  pure ()
+
 unit_text :: IO ()
 unit_text = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
@@ -183,8 +193,8 @@ test_roundTrip =
   , testProperty "maxBound @Int64" $ withTests 100 $ roundTrip r (Gen.int64 $ Range.singleton $ maxBound @Int64)
   , testProperty "minBound @Int64" $ withTests 100 $ roundTrip r (Gen.int64 $ Range.singleton $ minBound @Int64)
 
-  , testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
-  , testProperty "maxBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
+  -- , testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
+  -- , testProperty "maxBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
 
   , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
   , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
@@ -214,9 +224,9 @@ test_roundTrip =
   , testProperty "@Double" $ withTests 100 $ roundTrip r (Gen.double $ Range.exponentialFloat (-100) 100) -- OK
   , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
-  , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
+  -- , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
   -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-  -- , testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 1 100000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
+  , testProperty "@Text" $ withTests 1000 $ roundTripWith r (Gen.text (Range.linear 1 1000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
   -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $

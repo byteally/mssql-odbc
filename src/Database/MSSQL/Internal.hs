@@ -48,7 +48,7 @@ import Database.MSSQL.Internal.Ctx
 import Database.MSSQL.Internal.SQLError
 import Data.Text.Foreign as T
 import qualified Data.Text as T
-import Text.Read
+-- import Text.Read
 import Data.IORef
 import Data.Word
 import Data.Int
@@ -72,10 +72,10 @@ import Control.Applicative hiding ((<**>))
 import Data.Scientific
 import Data.Typeable
 -- import qualified Data.Text.Lazy.Builder as LTB
-import qualified Data.Text.Lazy as LT
+-- import qualified Data.Text.Lazy as LT
 import GHC.TypeLits
-import qualified Data.Text.Lazy.Encoding as LTE
--- import qualified Data.Text.Encoding as TE
+-- import qualified Data.Text.Lazy.Encoding as LTE
+import qualified Data.Text.Encoding as TE
 import Data.Char (isAscii)
 -- import Foreign.Marshal.Utils (fillBytes)
 
@@ -161,7 +161,6 @@ newtype ColPos = ColPos (IORef CUShort)
 data HSTMT a = HSTMT
   { getHSTMT :: Ptr SQLHSTMT
   , colPos   :: ColPos
-  , colSizeAdjustment :: CLong -> CLong
   } deriving Functor
 
 C.context $ mssqlCtx
@@ -430,7 +429,7 @@ allocHSTMT con = do
       True -> do
         hstmt <- peek hstmtp
         cpos <- initColPos
-        pure $ Right $ HSTMT hstmt cpos id
+        pure $ Right $ HSTMT hstmt cpos
   where
     hdbc = _hdbc con
 
@@ -791,7 +790,7 @@ field = RowParser
         fromField
 
 restmt :: forall a b. HSTMT a -> HSTMT b
-restmt (HSTMT stm cp f) = HSTMT stm cp f :: HSTMT b
+restmt (HSTMT stm cp) = HSTMT stm cp :: HSTMT b
 
 class FromRow t where
   fromRow :: RowParser t
@@ -877,12 +876,14 @@ instance FromField Word64 where
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)  
 -}
 
+{-
 instance (KnownNat n) => FromField (Sized n T.Text) where
   type FieldBufferType (Sized n T.Text) = CSized n CWchar
   fromField = \v -> do
     extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
       let clen = round ((fromIntegral bufSize :: Double) / 2) :: Word
       coerce <$> T.fromPtr (coerce (cwcharP :: Ptr CWchar)) (fromIntegral clen)
+-}
 
 instance FromField Double where
   type FieldBufferType Double = CDouble
@@ -897,7 +898,7 @@ instance FromField Bool where
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ if v == 1 then True else False)
 
 newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
-                  deriving (Show, Eq)
+                  deriving (Show, Eq, Generic)
 
 instance FromField ASCIIText where
   type FieldBufferType ASCIIText = CUnbound CChar
@@ -927,17 +928,15 @@ instance FromField Image where
     pure (coerce $ BSB.toLazyByteString bsb)
 
 instance FromField T.Text where
-  type FieldBufferType T.Text = CUnbound CWchar
+  type FieldBufferType T.Text = CUnbound CBinary
   fromField = \v -> do
     bsb <- unboundWith (getColBuffer v) mempty $
       \bufSize ccharP acc -> do
         a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
-        -- print a
-        -- print (TE.decodeUtf16BE a)
         pure (acc <> BSB.byteString a)
-    -- print $ "Final: " ++ show (BSB.toLazyByteString bsb)
-    pure (LT.toStrict (LTE.decodeUtf16BE $ BSB.toLazyByteString bsb ))
+    pure (TE.decodeUtf16LE . LBS.toStrict $ BSB.toLazyByteString bsb)      
 
+{-
 instance FromField Money where
   type FieldBufferType Money = CDecimal CChar
   fromField = \v -> do
@@ -946,7 +945,8 @@ instance FromField Money where
     let res = BS8.unpack bs
     maybe (error $ "Parse failed for Money: " ++ show res)
           (pure . Money) (readMaybe $ res)
-      
+-}
+
 instance FromField SmallMoney where
   type FieldBufferType SmallMoney = CDecimal CDouble
   fromField = \v -> do
@@ -1090,7 +1090,7 @@ instance SQLBindCol (ColBuffer (CUnbound CChar)) where
    
      where block hstmtP cdesc = do
              let bufSize = fromIntegral (20 :: Int)
-             chrFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
+             chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = unboundColBuffer (\acc f ->
@@ -1126,7 +1126,7 @@ instance SQLBindCol (ColBuffer CChar) where
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
+        bufSize = {-fromIntegral $-} (fromIntegral (colSize cdesc + 1)) -- colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
       chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
@@ -1147,7 +1147,7 @@ instance SQLBindCol (ColBuffer CBinary) where
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc))
+        bufSize = {-fromIntegral $-} (fromIntegral (colSize cdesc)) -- colSizeAdjustment hstmt (fromIntegral (colSize cdesc))
       binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
@@ -1168,7 +1168,7 @@ instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
-          bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
+          bufSize = {-fromIntegral $-} (fromIntegral (colSize cdesc + 1)) -- colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
       txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       putStrLn $ "BufSize: " ++ show bufSize
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -1215,7 +1215,7 @@ instance SQLBindCol (ColBuffer (CUnbound CWchar)) where
                        True -> do
                            lengthOrInd <- peekFP lenOrIndFP
                            let actBufSize = case fromIntegral lengthOrInd of
-                                              SQL_NO_TOTAL -> bufSize - 1
+                                              SQL_NO_TOTAL -> bufSize - 2
                                               _            -> lengthOrInd
                            acc' <- withForeignPtr txtFP $ \tptr -> f actBufSize (coerce tptr) acc
                            go acc'
@@ -1234,6 +1234,7 @@ instance SQLBindCol (ColBuffer (CDecimal CFloat)) where
     ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CFloat))
     pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
 
+{-
 instance SQLBindCol (ColBuffer (CDecimal CChar)) where
   sqlBindCol hstmt = do
     ebc <- sqlBindCol (coerce (adjustColSize (+2) hstmt) :: HSTMT (ColBuffer CChar))
@@ -1266,9 +1267,7 @@ instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n (CDecimal CChar))) wher
     pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
 
     where bufSize = fromIntegral (natVal (Proxy :: Proxy n)) + 3
-
-adjustColSize :: (CLong -> CLong) -> HSTMT a -> HSTMT a
-adjustColSize f hstmt = hstmt { colSizeAdjustment = (f . colSizeAdjustment hstmt) }
+-}
 
 newtype CUTinyInt = CUTinyInt CUChar
                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -2170,10 +2169,10 @@ newtype Image = Image { getImage :: LBS.ByteString }
 sqlMapping :: HM.HashMap TypeRep [SQLType]
 sqlMapping =
   HM.fromList
-  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL])
+  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
   , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
   , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
-  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY])  
+  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY, SQL_WLONGVARCHAR])  
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
   , (typeOf (undefined :: CLong)     , [SQL_INTEGER])
