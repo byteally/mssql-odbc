@@ -4,10 +4,11 @@
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE DataKinds           #-}
 
 module MsSQLTest where
 
-import Database.MsSQL
+import Database.MSSQL
 import Test.Tasty
 import Test.Tasty.HUnit
 import qualified Data.Vector.Storable as SV
@@ -107,13 +108,14 @@ localConnectionStr =
 testConnectInfo :: ConnectInfo
 testConnectInfo = connectInfo localConnectionStr
 
-_unit_text :: IO ()
-_unit_text = do
+unit_text :: IO ()
+unit_text = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
   Right con <- connect conInfo
   let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   print "bbbbb test"
-  res <- query con ("select CAST ('" <> t1 <> "' AS VARCHAR(5000))") :: IO (Either SQLErrors (Vector (Identity ASCIIText)))
+  res <- query con "select CAST (N'\65536\65536\65536\65536\65536\65536\65536\65536\65536' AS NTEXT)" :: IO (Either SQLErrors (Vector (Identity Text)))
+  print "\65536\65536\65536\65536\65536\65536\65536\65536\65536"
   print res
   disconnect con
   pure ()
@@ -125,40 +127,6 @@ _unit_timeOfDay = do
   --let -- s = "'00:00:00'"  
       -- t1 = read s :: TimeOfDay
       -- "select CAST ('" <> (T.pack $ show t1) <> "' AS TIME)
-            
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print  
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print  
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
   (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
   (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
   (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
@@ -246,11 +214,10 @@ test_roundTrip =
   , testProperty "@Double" $ withTests 100 $ roundTrip r (Gen.double $ Range.exponentialFloat (-100) 100) -- OK
   , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
-  , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getAsciiText t) <> "'")  
-  , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-  , testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 1 100000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
-  
-  --   -- --hedgehog-replay "Size 0 Seed 16971920948893089903 7310332839496341167"
+  , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
+  -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
+  -- , testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 1 100000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
+  -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $
         query_ "select CAST ( -100.0 AS FLOAT(53))"
@@ -259,13 +226,16 @@ test_roundTrip =
 
   where toMoney i64 = Money (read (show i64) / 10000)
         toSmallMoney i32 = SmallMoney (read (show i32) / 10000)
-        byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
+        -- byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
         doubleNull = BS.pack [0x0, 0x0]
         ppMaybe a = case a of
                       Nothing -> "null"
                       Just v  -> T.pack $ show v
         ppZonedTime (ZonedTime lt tz) =
           T.pack $ show lt <> " " <> ppTz tz
+
+        sized :: forall n a. a -> Sized n a
+        sized = Sized
 
 ppTz :: TimeZone -> String
 ppTz (TimeZone tzms _ _) =
@@ -402,6 +372,7 @@ getSQLType a = case show $ typeOf a of
   "ByteString" -> ("VARBINARY(5000)", False)
   "Maybe Double" -> ("FLOAT(53)", False)
   "ZonedTime" -> ("datetimeoffset", True)
+  "Sized 97 Text" -> ("NTEXT", False)  
   
 {-
   "Int8"   -> "TINYINT"

@@ -20,9 +20,9 @@
 {-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE RankNTypes                 #-}
-module Database.MsSQL.Internal
-  ( module Database.MsSQL.Internal.SQLError
-  , module Database.MsSQL.Internal
+module Database.MSSQL.Internal
+  ( module Database.MSSQL.Internal.SQLError
+  , module Database.MSSQL.Internal
   ) where
 
 
@@ -42,8 +42,8 @@ import qualified Data.Vector.Storable as SV
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Data.Coerce
-import Database.MsSQL.Internal.Ctx
-import Database.MsSQL.Internal.SQLError
+import Database.MSSQL.Internal.Ctx
+import Database.MSSQL.Internal.SQLError
 import Data.Text.Foreign as T
 import qualified Data.Text as T
 import Text.Read
@@ -55,8 +55,8 @@ import Control.Monad.Trans.Except
 import Control.Monad.Trans.Reader (ReaderT (..))
 import Control.Monad.IO.Class
 import Data.Time
-import Data.UUID.Types
-import Database.MsSQL.Internal.SQLTypes
+import Data.UUID.Types (UUID)
+import Database.MSSQL.Internal.SQLTypes
 import Data.Functor.Identity
 import Control.Monad
 import Control.Monad.Reader.Class
@@ -69,9 +69,12 @@ import Data.Functor.Compose
 import Control.Applicative hiding ((<**>))
 import Data.Scientific
 import Data.Typeable
-import qualified Data.Text.Lazy.Builder as LTB
+-- import qualified Data.Text.Lazy.Builder as LTB
 import qualified Data.Text.Lazy as LT
 import GHC.TypeLits
+import qualified Data.Text.Lazy.Encoding as LTE
+-- import qualified Data.Text.Encoding as TE
+import Data.Char (isAscii)
 -- import Foreign.Marshal.Utils (fillBytes)
 
 data ConnectParams = ConnectParams
@@ -638,6 +641,30 @@ newtype CUnbound a = CUnbound { getCUnbound :: a }
 newtype CSized (size :: Nat) a = CSized { getCSized :: a }
                               deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
+instance (KnownNat n) => IsString (Sized n T.Text) where
+  fromString = Sized . T.pack . lengthCheck
+    where lengthCheck x = case length x > fromIntegral n of
+            True -> error "Panic: string size greater than sized parameter"
+            False -> x
+
+          n = natVal (Proxy :: Proxy n)
+
+instance (KnownNat n) => IsString (Sized n ASCIIText) where
+  fromString = Sized . ASCIIText . lengthCheck . getASCIIText . fromString
+    where n = natVal (Proxy :: Proxy n)
+          lengthCheck x = case T.length x > fromIntegral n of
+            True -> error "Panic: string size greater than sized parameter"
+            False -> x
+
+instance IsString ASCIIText where
+  fromString = ASCIIText . T.pack . checkAscii
+    where checkAscii = map (\a -> case isAscii a of
+                               True -> a
+                               False -> error $ "Panic: non ascii character in ASCIIText " ++ show a)
+  
+newtype Sized (size :: Nat) a = Sized { getSized :: a }
+                              deriving (Show, Eq, Ord)
+
 newtype ColBuffer t = ColBuffer
   { getColBuffer :: ColBufferType (GetColBufferType t) t
   } 
@@ -848,6 +875,13 @@ instance FromField Word64 where
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)  
 -}
 
+instance (KnownNat n) => FromField (Sized n T.Text) where
+  type FieldBufferType (Sized n T.Text) = CSized n CWchar
+  fromField = \v -> do
+    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
+      let clen = round ((fromIntegral bufSize :: Double) / 2) :: Word
+      coerce <$> T.fromPtr (coerce (cwcharP :: Ptr CWchar)) (fromIntegral clen)
+
 instance FromField Double where
   type FieldBufferType Double = CDouble
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
@@ -860,7 +894,7 @@ instance FromField Bool where
   type FieldBufferType Bool = CBool
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ if v == 1 then True else False)
 
-newtype ASCIIText = ASCIIText { getAsciiText :: T.Text }
+newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
                   deriving (Show, Eq)
 
 instance FromField ASCIIText where
@@ -893,12 +927,14 @@ instance FromField Image where
 instance FromField T.Text where
   type FieldBufferType T.Text = CUnbound CWchar
   fromField = \v -> do
-    lzt <- unboundWith (getColBuffer v) mempty $
-      \bufSize cwcharP acc -> do
-        let clen = bufSize - 1 --  round ((fromIntegral bufSize :: Double)/2) :: Word
-        a <- T.fromPtr (coerce cwcharP) (fromIntegral clen)
-        pure (acc <> LTB.fromText a)
-    pure (LT.toStrict (LTB.toLazyText lzt))
+    bsb <- unboundWith (getColBuffer v) mempty $
+      \bufSize ccharP acc -> do
+        a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
+        -- print a
+        -- print (TE.decodeUtf16BE a)
+        pure (acc <> BSB.byteString a)
+    -- print $ "Final: " ++ show (BSB.toLazyByteString bsb)
+    pure (LT.toStrict (LTE.decodeUtf16BE $ BSB.toLazyByteString bsb ))
 
 instance FromField Money where
   type FieldBufferType Money = CDecimal CChar
@@ -931,7 +967,7 @@ instance FromField LocalTime where
 
 instance FromField ZonedTime where
   type FieldBufferType ZonedTime = CZonedTime
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ Database.MsSQL.Internal.SQLTypes.getZonedTime v)
+  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ Database.MSSQL.Internal.SQLTypes.getZonedTime v)
 
 instance FromField UTCTime where
   type FieldBufferType UTCTime = FieldBufferType ZonedTime
@@ -951,7 +987,9 @@ instance FromField a => FromField (Maybe a) where
         if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
           then pure Nothing
           else Just <$> (fromField v)
-      UnboundColBuffer _ -> pure Nothing
+      UnboundColBuffer _ ->
+          pure Nothing
+          -- fromField (ColBuffer (unboundColBuffer $ \a accf -> k (Just a) $ \len ptr a -> if fromIntegral len == SQL_NULL_DATA then pure Nothing else Just <$> accf len ptr a))
   
 instance FromField a => FromField (Identity a) where
   type FieldBufferType (Identity a) = FieldBufferType a
@@ -1130,6 +1168,7 @@ instance SQLBindCol (ColBuffer CWchar) where
       let cpos = colPosition cdesc
           bufSize = fromIntegral $ colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
       txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+      putStrLn $ "BufSize: " ++ show bufSize
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
         [C.block| int {
@@ -1150,8 +1189,8 @@ instance SQLBindCol (ColBuffer (CUnbound CWchar)) where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (20 :: Int)
-             txtFP <- mallocForeignPtrBytes (fromIntegral bufSize + 1)
+             let bufSize = fromIntegral (36 :: Int)
+             txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = unboundColBuffer (\acc f ->
@@ -1174,8 +1213,8 @@ instance SQLBindCol (ColBuffer (CUnbound CWchar)) where
                        True -> do
                            lengthOrInd <- peekFP lenOrIndFP
                            let actBufSize = case fromIntegral lengthOrInd of
-                                              SQL_NO_TOTAL -> bufSize - 2
-                                              _            -> lengthOrInd                                              
+                                              SQL_NO_TOTAL -> bufSize - 1
+                                              _            -> lengthOrInd
                            acc' <- withForeignPtr txtFP $ \tptr -> f actBufSize (coerce tptr) acc
                            go acc'
                        False -> pure acc
@@ -1197,6 +1236,34 @@ instance SQLBindCol (ColBuffer (CDecimal CChar)) where
   sqlBindCol hstmt = do
     ebc <- sqlBindCol (coerce (adjustColSize (+2) hstmt) :: HSTMT (ColBuffer CChar))
     pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CChar)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CChar))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+    where bufSize = fromIntegral (natVal (Proxy :: Proxy n)) + 1
+
+instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CBinary)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CBinary))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+    where bufSize = fromIntegral (natVal (Proxy :: Proxy n))
+
+instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CWchar)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CWchar))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+    where bufSize = fromIntegral ((natVal (Proxy :: Proxy n)) * 4) + 2
+
+instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n (CDecimal CChar))) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CChar))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
+
+    where bufSize = fromIntegral (natVal (Proxy :: Proxy n)) + 3
 
 adjustColSize :: (CLong -> CLong) -> HSTMT a -> HSTMT a
 adjustColSize f hstmt = hstmt { colSizeAdjustment = (f . colSizeAdjustment hstmt) }

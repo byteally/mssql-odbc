@@ -1,5 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-module Database.MsSQL.Internal.SQLTypes where
+module Database.MSSQL.Internal.SQLTypes where
 
 import Foreign.C.Types
 import Foreign.Storable

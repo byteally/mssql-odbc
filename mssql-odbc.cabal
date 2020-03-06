@@ -43,16 +43,16 @@ library
               , scientific             >= 0.3.6.2 && < 0.4
 
   exposed-modules:
-                  Database.MsSQL
-                  Database.MsSQL.Internal
+                  Database.MSSQL
+                  Database.MSSQL.Internal
   other-modules:
-                Database.MsSQL.Internal.Ctx
-                Database.MsSQL.Internal.SQLError
-                Database.MsSQL.Internal.SQLTypes
-                Database.MsSQL.Internal.Conversion
+                Database.MSSQL.Internal.Ctx
+                Database.MSSQL.Internal.SQLError
+                Database.MSSQL.Internal.SQLTypes
+                Database.MSSQL.Internal.Conversion
                 Paths_mssql_odbc
   if impl(ghc < 8.2.0)
-    c-sources:           src/Database/MsSQL/Internal.c
+    c-sources:           src/Database/MSSQL/Internal.c
   default-language: Haskell2010
   ghc-options: -Wall -Werror
   cc-options: -Wall -Wconversion

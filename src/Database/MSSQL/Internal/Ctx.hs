@@ -2,7 +2,7 @@
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Database.MsSQL.Internal.Ctx where
+module Database.MSSQL.Internal.Ctx where
 
 import qualified Data.Map as Map
 import qualified Language.C.Inline as C

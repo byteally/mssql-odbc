@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE CPP                        #-}
-module Database.MsSQL.Internal.SQLError where
+module Database.MSSQL.Internal.SQLError where
 
 import Data.Text (Text)
 import Data.Int
