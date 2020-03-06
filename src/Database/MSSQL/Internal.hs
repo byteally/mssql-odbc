@@ -20,6 +20,8 @@
 {-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE RankNTypes                 #-}
+{-# LANGUAGE DeriveGeneric              #-}
+
 module Database.MSSQL.Internal
   ( module Database.MSSQL.Internal.SQLError
   , module Database.MSSQL.Internal
@@ -663,7 +665,7 @@ instance IsString ASCIIText where
                                False -> error $ "Panic: non ascii character in ASCIIText " ++ show a)
   
 newtype Sized (size :: Nat) a = Sized { getSized :: a }
-                              deriving (Show, Eq, Ord)
+                              deriving (Generic, Show, Eq, Ord)
 
 newtype ColBuffer t = ColBuffer
   { getColBuffer :: ColBufferType (GetColBufferType t) t
