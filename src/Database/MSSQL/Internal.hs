@@ -356,7 +356,7 @@ getMessages handleRef = do
          }|]
   case ret of
     0    -> Right <$> readIORef msgsRef
-    100  -> Right <$> readIORef msgsRef 
+    100  -> Right <$> readIORef msgsRef
     -2 -> pure $ Left $ SQLError
             { sqlState = ""
             , sqlMessage = "Invalid " <> handleName <> " handle"
@@ -876,14 +876,19 @@ instance FromField Word64 where
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)  
 -}
 
-{-
 instance (KnownNat n) => FromField (Sized n T.Text) where
   type FieldBufferType (Sized n T.Text) = CSized n CWchar
   fromField = \v -> do
     extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
+      putStrLn $ "BufSize: " ++ show bufSize      
       let clen = round ((fromIntegral bufSize :: Double) / 2) :: Word
-      coerce <$> T.fromPtr (coerce (cwcharP :: Ptr CWchar)) (fromIntegral clen)
--}
+      coerce <$> T.fromPtr (coerce (cwcharP :: Ptr CWchar)) (fromIntegral clen)      
+
+instance (KnownNat n) => FromField (Sized n ASCIIText) where
+  type FieldBufferType (Sized n ASCIIText) = CSized n CChar
+  fromField = \v -> do
+    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
+      (Sized . ASCIIText . T.pack) <$> Foreign.C.peekCStringLen (ccharP, fromIntegral bufSize)
 
 instance FromField Double where
   type FieldBufferType Double = CDouble
@@ -1127,6 +1132,7 @@ instance SQLBindCol (ColBuffer CChar) where
       let
         cpos = colPosition cdesc
         bufSize = {-fromIntegral $-} (fromIntegral (colSize cdesc + 1)) -- colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
+      -- print $ "colSize as said: " ++ show (colSize cdesc)
       chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
@@ -1168,9 +1174,9 @@ instance SQLBindCol (ColBuffer CWchar) where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
-          bufSize = {-fromIntegral $-} (fromIntegral (colSize cdesc + 1)) -- colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
+          bufSize = fromIntegral (colSize cdesc * 4 + 1) -- colSizeAdjustment hstmt (fromIntegral (colSize cdesc + 1))
+      -- print $ "colSize as said: " ++ show (colSize cdesc)          
       txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
-      putStrLn $ "BufSize: " ++ show bufSize
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
         [C.block| int {
@@ -1239,14 +1245,18 @@ instance SQLBindCol (ColBuffer (CDecimal CChar)) where
   sqlBindCol hstmt = do
     ebc <- sqlBindCol (coerce (adjustColSize (+2) hstmt) :: HSTMT (ColBuffer CChar))
     pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
-
+-}
 instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CChar)) where
   sqlBindCol hstmt = do
-    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CChar))
+    ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CChar))
     pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
 
-    where bufSize = fromIntegral (natVal (Proxy :: Proxy n)) + 1
+instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CWchar)) where
+  sqlBindCol hstmt = do
+    ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CWchar))
+    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
 
+{-
 instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CBinary)) where
   sqlBindCol hstmt = do
     ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CBinary))
@@ -1537,7 +1547,6 @@ instance SQLBindCol (ColBuffer CTimeOfDay) where
      todFP <- mallocForeignPtr 
      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
      ret <- fmap ResIndicator $ withForeignPtr todFP $ \todP -> do
-      -- fillBytes todP 0x0 14
       [C.block| int {
           SQLRETURN ret = 0;
           SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
@@ -2172,7 +2181,7 @@ sqlMapping =
   [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
   , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
   , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
-  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY, SQL_WLONGVARCHAR])  
+  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY, SQL_WLONGVARCHAR, SQL_VARCHAR, SQL_WVARCHAR, SQL_LONGVARCHAR])  
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
   , (typeOf (undefined :: CLong)     , [SQL_INTEGER])

@@ -224,10 +224,11 @@ test_roundTrip =
   , testProperty "@Double" $ withTests 100 $ roundTrip r (Gen.double $ Range.exponentialFloat (-100) 100) -- OK
   , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
-  -- , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r asciiText (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
+  -- , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r (asciiText (Range.constant 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
   -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-  , testProperty "@Text" $ withTests 1000 $ roundTripWith r (Gen.text (Range.linear 1 1000) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" t <> "'")
-  -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
+  -- , testProperty "@Text" $ withTests 1000 $ roundTripWith r (Gen.text (Range.linear 1 1000) Gen.unicode) (\t -> "'" <> T.replace "'" "''" t <> "'")
+  , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
+  , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")  
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $
         query_ "select CAST ( -100.0 AS FLOAT(53))"
@@ -258,9 +259,9 @@ ppTz (TimeZone tzms _ _) =
       ppSign False = "-"
   in  ppSign sign <> show hrs <> ":" <> if mins < 10 then "0" <> show mins else show mins
         
-asciiText :: MonadGen m => m ASCIIText
-asciiText =
-  (ASCIIText . T.pack) <$> Gen.list (Range.constant 0 1000) Gen.alphaNum
+asciiText :: MonadGen m => Range Int -> m ASCIIText
+asciiText r =
+  (ASCIIText . T.pack) <$> Gen.list r Gen.alphaNum
 
 day :: ( MonadGen m
       , GenBase m ~ Identity
@@ -378,11 +379,12 @@ getSQLType a = case show $ typeOf a of
   "Money"    -> ("MONEY", True)
   "SmallMoney" -> ("SMALLMONEY", True)  
   "ASCIIText" -> ("VARCHAR(5000)", False)
-  "Text" -> ("NTEXT", False)  
+  "Text" -> ("TEXT", False)  
   "ByteString" -> ("VARBINARY(5000)", False)
   "Maybe Double" -> ("FLOAT(53)", False)
   "ZonedTime" -> ("datetimeoffset", True)
-  "Sized 97 Text" -> ("NTEXT", False)  
+  "Sized 97 Text" -> ("NVARCHAR(97)", False)  
+  "Sized 97 ASCIIText" -> ("VARCHAR(97)", False)  
   
 {-
   "Int8"   -> "TINYINT"
