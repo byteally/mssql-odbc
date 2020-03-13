@@ -66,6 +66,8 @@ test-suite mssql-odbc-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules: MsSQLTest
+                 Utils
+                 SQLBindColTest
   hs-source-dirs:
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
@@ -82,7 +84,8 @@ test-suite mssql-odbc-test
               , time                   >= 1.7     && < 1.10
               , uuid-types
               , unordered-containers   >= 0.2.4   && < 0.3
-              , mssql-odbc              
+              , mssql-odbc
+                      
   other-modules:
       Paths_mssql_odbc
   default-language: Haskell2010

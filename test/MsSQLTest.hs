@@ -42,6 +42,8 @@ import qualified Data.ByteString as B
 
 import qualified Data.String as S
 import Numeric
+import Control.Exception
+import Utils
 
 data TestT1 = TestT1
   { test_id :: Int32
@@ -94,37 +96,69 @@ instance FromRow Album
 -- testConnectInfo :: ConnectInfo  
 -- testConnectInfo = connectInfo "Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=Chinook;UID=sa;PWD=p@ssw0rd;ApplicationIntent=ReadOnly"
 
-localConnectionStr :: ConnectionString 
-localConnectionStr =
-  ConnectionString { database          = "Chinook"
-                   , server            = "localhost"
-                   , port              = 1433
-                   , user              = "sa"
-                   , password          = "p@ssw0rd"
-                   , odbcDriver        = odbcSQLServer17
-                   , connectProperties = HM.singleton "ApplicationIntent" "ReadOnly"
-                   }
+data DT_Overflow = DT_Overflow { dto1 :: Int, dto2 :: Double }
+        deriving (Show, Eq, Generic)
 
-testConnectInfo :: ConnectInfo
-testConnectInfo = connectInfo localConnectionStr
+instance FromRow DT_Overflow where
+  -- fromRow = DT_Overflow <*> field <*> field
 
-unit_ascii :: IO ()
-unit_ascii = do
+_unit_instance_overflow :: IO ()
+_unit_instance_overflow = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
-  Right con <- connect conInfo
-  print "ascii test"
-  res <- query con "select CAST ('LPN' AS VARCHAR), CAST ('LPN' AS VARCHAR)" :: IO (Either SQLErrors (Vector ((ASCIIText, ASCIIText))))
+  con <- connect conInfo
+  print "instance overflow test"
+  res <- query con "select CAST(54 AS BIGINT), CAST(96.2142 AS FLOAT(53)), 'takashis castle')" :: IO (Vector DT_Overflow)
   print res
   disconnect con
   pure ()
 
-unit_text :: IO ()
-unit_text = do
+data DT_Underflow = DT_Underflow { dtu1 :: Int, dtu2 :: Double }
+        deriving (Show, Eq, Generic)
+
+instance FromRow DT_Underflow where
+  -- fromRow = DT_Underflow <*> field <*> field
+
+_unit_instance_underflow :: IO ()
+_unit_instance_underflow = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
-  Right con <- connect conInfo
+  con <- connect conInfo
+  print "instance overflow test"
+  res <- query con "select CAST (54 AS BIGINT)" :: IO (Vector DT_Underflow)
+  print res
+  disconnect con
+  pure ()
+
+
+-- NOTE: This fails on sqlserver 2012
+_unit_double :: IO ()
+_unit_double = do
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  con <- connect conInfo
+  print "float test"
+  let v = -99.99999999999979
+  res <- query con "select CAST (-99.99999999999979 AS FLOAT(53))" :: IO (Vector (Identity Double))
+  print res
+  pure (pure v) @=? res
+  disconnect con
+  pure ()
+
+_unit_ascii :: IO ()
+_unit_ascii = do
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  con <- connect conInfo
+  print "ascii test"
+  res <- query con "select CAST ('LPN' AS VARCHAR), CAST ('LPN' AS VARCHAR)" :: IO (Vector ((ASCIIText, ASCIIText)))
+  print res
+  disconnect con
+  pure ()
+
+_unit_text :: IO ()
+_unit_text = do
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  con <- connect conInfo
   let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   print "bbbbb test"
-  res <- query con "select CAST (N'\65536\65536\65536\65536\65536\65536\65536\65536\65536' AS NTEXT)" :: IO (Either SQLErrors (Vector (Identity Text)))
+  res <- query con "select CAST (N'\65536\65536\65536\65536\65536\65536\65536\65536\65536' AS NTEXT)" :: IO (Vector (Identity Text))
   print "\65536\65536\65536\65536\65536\65536\65536\65536\65536"
   print res
   disconnect con
@@ -133,13 +167,13 @@ unit_text = do
 _unit_timeOfDay :: IO ()
 _unit_timeOfDay = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
-  Right con <- connect conInfo
+  con <- connect conInfo
   --let -- s = "'00:00:00'"  
       -- t1 = read s :: TimeOfDay
       -- "select CAST ('" <> (T.pack $ show t1) <> "' AS TIME)
-  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print    
-  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
-  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Either SQLErrors (Vector (Identity TimeOfDay)))) >>= print
+  (query con ("select CAST ('10:15:10.56855412' AS TIME)") :: IO (Vector (Identity TimeOfDay))) >>= print    
+  (query con ("select CAST ('00:00:10.5412' AS TIME)") :: IO (Vector (Identity TimeOfDay))) >>= print
+  (query con ("select CAST ('00:00:00' AS TIME)") :: IO (Vector (Identity TimeOfDay))) >>= print
   
   disconnect con
   pure ()
@@ -149,34 +183,27 @@ _unit_timeOfDay = do
 _unit_connect :: IO ()
 _unit_connect = do
   let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
-  Right con <- connect conInfo
-  res <- query con "select * from Album" :: IO (Either SQLErrors (Vector Album))
-  res1 <- runSession testConnectInfo $ query_ "select img from test"
+  con <- connect conInfo
+  res <- query con "select * from Album" :: IO ((Vector Album))
+  res1 <- query con "select img from test" :: IO (Vector (Identity Image))
 
   print res
-  case res1 :: Either SQLErrors (Vector (Identity Image)) of
-    Right vs        -> do
-      print (length vs)
-      mapM (BSL.writeFile "/tmp/output" . getImage . runIdentity) vs >> pure ()
-    Left es         -> print es
+  print (length res1)
+  mapM (BSL.writeFile "/tmp/output" . getImage . runIdentity) res1 >> pure ()
   disconnect con
   pure ()
 
 _unit_sqlinsert :: IO ()
 _unit_sqlinsert = do
-  res <- runSession testConnectInfo $ do
-    execute_ "insert test1 (test_id, col1, col2, col3, col4, smallint, bit, tinyint, bigint, dbl, flt, datec, tod, dt, dt2, sdt, dtz, utc1, uuid, ntxt, char10, nchar10) VALUES (5, '12/13/2012', 3, 'fdfd', 'fdffddf', 32, 1, 23,99999999,4, 6.5,'1/13/2013', '00:00:00', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123+05:30', '2015-03-19 05:15:18.123+05:30', '0E984725-C51C-4BF4-9960-E1C80E27ABA0', N'🌀', 'dfd', N'🌀');"
+  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}  
+  con <- connect conInfo  
+  res <- execute con "insert test1 (test_id, col1, col2, col3, col4, smallint, bit, tinyint, bigint, dbl, flt, datec, tod, dt, dt2, sdt, dtz, utc1, uuid, ntxt, char10, nchar10) VALUES (5, '12/13/2012', 3, 'fdfd', 'fdffddf', 32, 1, 23,99999999,4, 6.5,'1/13/2013', '00:00:00', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123+05:30', '2015-03-19 05:15:18.123+05:30', '0E984725-C51C-4BF4-9960-E1C80E27ABA0', N'🌀', 'dfd', N'🌀');"
   print res
 
-test_roundTrip :: TestTree
-test_roundTrip =
+_test_roundTrip :: TestTree
+_test_roundTrip =
   withResource (connect testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]})
-               (\h -> case h of
-                   Right h' -> do
-                     disconnect h'
-                     pure ()
-                   Left _ -> pure ()
-               ) $ \r -> 
+               disconnect $ \r -> 
   testGroup "round trip tests"
   [ testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ minBound @Int)
@@ -196,8 +223,8 @@ test_roundTrip =
   -- , testProperty "minBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ minBound @Int64))  
   -- , testProperty "maxBound @Money" $ withTests 100 $ roundTrip r (toMoney <$> (Gen.int64 $ Range.singleton $ maxBound @Int64))  
 
-  , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
-  , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
+  -- , testProperty "minBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ minBound @Int32))  -- OK
+  -- , testProperty "maxBound @SmallMoney" $ withTests 100 $ roundTrip r (toSmallMoney <$> (Gen.int32 $ Range.singleton $ maxBound @Int32))  -- OK
   
   -- , testProperty "maxBound @Word" $ withTests 100 $ roundTrip r (Gen.word $ Range.singleton $ maxBound @Word)
   -- , testProperty "minBound @Word" $ withTests 100 $ roundTrip r (Gen.word $ Range.singleton $ minBound @Word)
@@ -227,12 +254,14 @@ test_roundTrip =
   -- , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r (asciiText (Range.constant 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
   -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
   -- , testProperty "@Text" $ withTests 1000 $ roundTripWith r (Gen.text (Range.linear 1 1000) Gen.unicode) (\t -> "'" <> T.replace "'" "''" t <> "'")
-  , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
-  , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")  
+  -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
+  -- , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")
+  {-
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $
         query_ "select CAST ( -100.0 AS FLOAT(53))"
       v === Right (V.fromList [Identity (-100.0 :: Double)])
+  -}
   ]
 
   where toMoney i64 = Money (read (show i64) / 10000)
@@ -248,152 +277,3 @@ test_roundTrip =
         sized :: forall n a. a -> Sized n a
         sized = Sized
 
-ppTz :: TimeZone -> String
-ppTz (TimeZone tzms _ _) =
-  let hrs = posTzms `div` 60
-      mins = posTzms `mod` 60
-      (sign, posTzms) = if tzms < 0
-                        then (False, (-1) * tzms)
-                        else (True, tzms)
-      ppSign True  = "+"
-      ppSign False = "-"
-  in  ppSign sign <> show hrs <> ":" <> if mins < 10 then "0" <> show mins else show mins
-        
-asciiText :: MonadGen m => Range Int -> m ASCIIText
-asciiText r =
-  (ASCIIText . T.pack) <$> Gen.list r Gen.alphaNum
-
-day :: ( MonadGen m
-      , GenBase m ~ Identity
-      ) => m Day
-day = Gen.just $ do
-  dy <- Gen.enum 1 31
-  m <- Gen.enum 1 12
-  yr <- Gen.enum 2012 2016
-  pure $ fromGregorianValid yr m dy
-
-{- TODO:
-* Valid range of second including leap seconds is 0 to 61
-  - TIME has problem parsing 60 and 61 as sec
-* TIME has problem with parsing fractional sec
--}
-timeOfDay :: ( MonadGen m
-             , GenBase m ~ Identity
-             ) => m TimeOfDay
-timeOfDay = Gen.just $ do
-  h <- Gen.enum 0 24
-  m <- Gen.enum 0 59
-  (s :: Int) <- Gen.enum 0 59 -- TODO: Handle pico
-  pure $ makeTimeOfDayValid h m (fromRational $ toRational s)
-
-localTime :: ( MonadGen m
-             , GenBase m ~ Identity
-             ) => m LocalTime
-localTime = do
-  dy <- day
-  tod <- timeOfDay
-  pure $ LocalTime dy tod
-
-timeZone :: ( MonadGen m
-             , GenBase m ~ Identity
-             ) => m TimeZone
-timeZone = do
-  tzms <- Gen.enum (-720) 720
-  sOnly <- Gen.bool
-  tzn <- Gen.element ["UTC", "UT", "GMT", "EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT"]
-  pure (TimeZone tzms sOnly tzn)
-  
-
-zonedTime :: ( MonadGen m
-             , GenBase m ~ Identity
-             ) => m ZonedTime
-zonedTime = ZonedTime <$> localTime <*> timeZone
-
-roundTrip :: forall a.
-  ( Show a
-  , Eq a
-  , FromField a
-  , Typeable a
-  ) => IO (Either SQLErrors Connection) -> Gen a -> Property
-roundTrip con gen =
-  roundTripWith con gen (T.pack . show)
-
-roundTripWith :: forall a.
-  ( Eq a
-  , FromField a
-  , Typeable a
-  , Show a
-  ) => IO (Either SQLErrors Connection) -> Gen a -> (a -> Text) -> Property
-roundTripWith con gen f =
-  property $ do
-    val <- forAll gen
-    trippingM val mkQuery evalQuery
-    pure ()
-
-    where mkQuery a =
-            let fmtedVal =
-                  if isQuoted
-                     then "'" <> f a <> "'"
-                     else f a 
-                (sqlType, isQuoted) = getSQLType a
-            in eval $ S.fromString (T.unpack ("select CAST (" <> fmtedVal <> " AS " <> sqlType <> ")"))
-
-          evalQuery q =
-            evalIO . fmap wrapCompose $ do
-                Right con' <- con
-                query con' q
-
-          wrapCompose :: forall a b.
-                        Either a (Vector (Identity b)) ->
-                        Compose (Either a) (Compose Vector Identity) b
-          wrapCompose = Compose . fmap Compose
-
-{-
-    let valTxt = f val
-        sqlType = fst $ getSQLType gen
-        isQuoted = snd $ getSQLType gen
-        fmtedVal = if isQuoted then "'" <> valTxt <> "'" else valTxt
---    liftIO $ print $ "select CAST (" <> fmtedVal <> " AS " <> (sqlType) <> ")"
-    r <- evalEither =<< (
-      liftIO $ runSession testConnectInfo $ do
-          -- liftIO $ print ("select CAST (" <> fmtedVal <> " AS " <> (sqlType) <> ")")
-          r :: Vector (Identity a) <- query_ $ ("select CAST (" <> fmtedVal <> " AS " <> (sqlType) <> ")")
-          pure r
-      )
-
--}
-          
-getSQLType :: Typeable a => a -> (Text, Bool)
-getSQLType a = case show $ typeOf a of
-  "Int"    -> ("BIGINT", False)
-  "Int16"  -> ("SMALLINT", False)
-  "Int32"  -> ("INTEGER", False)
-  "Int64"  -> ("BIGINT", False)
-  "Word8"  -> ("TINYINT", False)
-  "Bool"   -> ("BIT", False)
-  "Day"    -> ("DATE", True)
-  "TimeOfDay" -> ("TIME", True)
-  "LocalTime" -> ("DATETIME2", True)
-  "Float"     -> ("REAL", False)
-  "Double"    -> ("FLOAT(53)", False)
-  "Money"    -> ("MONEY", True)
-  "SmallMoney" -> ("SMALLMONEY", True)  
-  "ASCIIText" -> ("VARCHAR(5000)", False)
-  "Text" -> ("TEXT", False)  
-  "ByteString" -> ("VARBINARY(5000)", False)
-  "Maybe Double" -> ("FLOAT(53)", False)
-  "ZonedTime" -> ("datetimeoffset", True)
-  "Sized 97 Text" -> ("NVARCHAR(97)", False)  
-  "Sized 97 ASCIIText" -> ("VARCHAR(97)", False)  
-  
-{-
-  "Int8"   -> "TINYINT"
-  "Word"   -> "NUMERIC(20,0)"
-  "Word16" -> "NUMERIC(5,0)"
-  "Word32" -> "NUMERIC(10,0)"
-  "Word64" -> "NUMERIC(20,0)"
--}
-
--- NOTE: orphan instance for equality
-instance Eq ZonedTime where
-  (ZonedTime t1 tz1) == (ZonedTime t2 tz2) = t1 == t2 && ppTz tz1 == ppTz tz2
