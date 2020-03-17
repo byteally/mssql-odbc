@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE BangPatterns               #-}
 
 module SQLBindColTest where
 
@@ -19,6 +20,7 @@ import Data.Coerce
 import Numeric (showHex)
 import Test.Tasty.Hedgehog
 import qualified Data.ByteString.Internal as B
+import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import Data.Typeable
 import Foreign.C.Types
@@ -29,6 +31,8 @@ import Foreign.Storable
 import Data.Int
 import Data.Word
 import Data.Time
+import Control.Monad.IO.Class
+import Data.Char (ord)
 
 test_bindColUnboundRoundTrip :: TestTree
 test_bindColUnboundRoundTrip =
@@ -36,7 +40,7 @@ test_bindColUnboundRoundTrip =
                 disconnect $ \r -> 
   testGroup "SQLBindcol unbound round trip tests"
   [ -- testProperty "binary" $ withTests 100 $ binaryProp r
-    -- testProperty "text" $ withTests 100 $ textProp r
+    -- testProperty "text" $ withTests 1 $ textProp r
   ]
 
 test_bindColBoundRoundTrip :: TestTree
@@ -60,15 +64,29 @@ test_bindColBoundRoundTrip =
 
 -- NOTE: 0x0 was failing
 -- NOTE: on larger tests binaryProp is hanging - is it due to huge allocations?. NOTE: when filter was removed, got quick failure.
-binaryProp con =
+binaryProp con = -- property $ do
   tripTwice con byteGen ppBytes SQLBound (ppBytes . getSQLBound)
+  -- let txt = "\NUL\NUL" :: LBS.ByteString
+  -- res <- do
+  --   q <- mkQuery ppBytes txt
+  --   liftIO $ print q
+  --   evalQuery con q
+  -- pure txt === res
 
   where byteGen = Gen.bytes (Range.linear 0 8000)
         ppBytes t = "0x" <> T.pack (B.foldr showHex "" t)
 
-textProp con =
-  tripTwice con textGen quote SQLBound (quote . getSQLBound)
-  where textGen = Gen.text (Range.linear 1 8000) (Gen.filter (\x -> x /=  '\0') Gen.unicode)
+textProp con = property $ do
+  txt <- forAll textGen
+  -- liftIO $ putStrLn $ "Text is: " <> T.unpack txt
+  !res <- do
+    q <- mkQuery quote txt
+    -- liftIO $ putStrLn $ "Query is: " <> T.unpack q
+    evalQuery con q
+  pure txt === res
+  
+  -- tripTwice con textGen quote SQLBound (quote . getSQLBound)
+  where textGen = Gen.text (Range.linear 1 10) (Gen.filter (\x -> ord x > 40) Gen.ascii)
         quote t = "'" <> T.replace "'" "''" t <> "'"
 
 intProp con =
@@ -128,8 +146,7 @@ tripTwice con gen at fab bt = do
   property $ do
     val <- forAll gen
     trippingM val (mkQuery at) (evalQuery con)
-    -- trippingM (fab val) (mkQuery bt) (evalQuery con)
-  
+    trippingM (fab val) (mkQuery bt) (evalQuery con)
   
 -- NOTE: instances for testing
 newtype SQLBound a = SQLBound { getSQLBound :: a }

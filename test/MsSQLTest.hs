@@ -104,7 +104,7 @@ instance FromRow DT_Overflow where
 
 _unit_instance_overflow :: IO ()
 _unit_instance_overflow = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   print "instance overflow test"
   res <- query con "select CAST(54 AS BIGINT), CAST(96.2142 AS FLOAT(53)), 'takashis castle')" :: IO (Vector DT_Overflow)
@@ -120,7 +120,7 @@ instance FromRow DT_Underflow where
 
 _unit_instance_underflow :: IO ()
 _unit_instance_underflow = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   print "instance overflow test"
   res <- query con "select CAST (54 AS BIGINT)" :: IO (Vector DT_Underflow)
@@ -132,7 +132,7 @@ _unit_instance_underflow = do
 -- NOTE: This fails on sqlserver 2012
 _unit_double :: IO ()
 _unit_double = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   print "float test"
   let v = -99.99999999999979
@@ -144,7 +144,7 @@ _unit_double = do
 
 _unit_ascii :: IO ()
 _unit_ascii = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   print "ascii test"
   res <- query con "select CAST ('LPN' AS VARCHAR), CAST ('LPN' AS VARCHAR)" :: IO (Vector ((ASCIIText, ASCIIText)))
@@ -154,7 +154,7 @@ _unit_ascii = do
 
 _unit_text :: IO ()
 _unit_text = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   print "bbbbb test"
@@ -166,7 +166,7 @@ _unit_text = do
 
 _unit_timeOfDay :: IO ()
 _unit_timeOfDay = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   --let -- s = "'00:00:00'"  
       -- t1 = read s :: TimeOfDay
@@ -182,7 +182,7 @@ _unit_timeOfDay = do
 
 _unit_connect :: IO ()
 _unit_connect = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}
+  let conInfo = testConnectInfo
   con <- connect conInfo
   res <- query con "select * from Album" :: IO ((Vector Album))
   res1 <- query con "select img from test" :: IO (Vector (Identity Image))
@@ -195,14 +195,14 @@ _unit_connect = do
 
 _unit_sqlinsert :: IO ()
 _unit_sqlinsert = do
-  let conInfo = testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]}  
+  let conInfo = testConnectInfo
   con <- connect conInfo  
   res <- execute con "insert test1 (test_id, col1, col2, col3, col4, smallint, bit, tinyint, bigint, dbl, flt, datec, tod, dt, dt2, sdt, dtz, utc1, uuid, ntxt, char10, nchar10) VALUES (5, '12/13/2012', 3, 'fdfd', 'fdffddf', 32, 1, 23,99999999,4, 6.5,'1/13/2013', '00:00:00', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123+05:30', '2015-03-19 05:15:18.123+05:30', '0E984725-C51C-4BF4-9960-E1C80E27ABA0', N'🌀', 'dfd', N'🌀');"
   print res
 
 _test_roundTrip :: TestTree
 _test_roundTrip =
-  withResource (connect testConnectInfo {attrBefore = SV.fromList [SQL_ATTR_ACCESS_MODE, SQL_ATTR_AUTOCOMMIT]})
+  withResource (connect testConnectInfo)
                disconnect $ \r -> 
   testGroup "round trip tests"
   [ testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
