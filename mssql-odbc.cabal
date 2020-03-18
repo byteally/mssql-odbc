@@ -50,6 +50,7 @@ library
                 Database.MSSQL.Internal.SQLError
                 Database.MSSQL.Internal.SQLTypes
                 Database.MSSQL.Internal.Conversion
+                Database.MSSQL.Internal.ConnectAttribute                
                 Paths_mssql_odbc
   if impl(ghc < 8.2.0)
     c-sources:           src/Database/MSSQL/Internal.c

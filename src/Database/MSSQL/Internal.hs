@@ -24,10 +24,11 @@
 
 module Database.MSSQL.Internal
   ( module Database.MSSQL.Internal.SQLError
+  , module Database.MSSQL.Internal.ConnectAttribute
   , module Database.MSSQL.Internal
   ) where
 
-
+import Database.MSSQL.Internal.ConnectAttribute
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -77,7 +78,6 @@ import Data.Char (isAscii)
 import Control.Exception (Exception, throwIO, bracket, onException, finally)
 -- import Foreign.Marshal.Utils (fillBytes)
 import qualified Foreign.C.String as F
-import qualified Data.ByteString.Internal as BI
 
 
 data ConnectParams = ConnectParams
@@ -142,47 +142,10 @@ instance IsString ConnectionString where
 
 data ConnectInfo = ConnectInfo
   { connectionString :: ConnectionString
-  , attrBefore :: [ConnectAttr]
-  , attrAfter  :: [ConnectAttr]
+  , attrBefore :: [ConnectAttr 'ConnectBefore]
+  , attrAfter  :: [ConnectAttr 'ConnectAfter]
   }
 
-connectAttrPtr :: ConnectAttr -> IO (ForeignPtr (), CLong)
-connectAttrPtr connAttr =
-  case attrValuePtr connAttr of
-    AttrValue v -> mkVoidPtrFromLong v
-    AttrPtr (String t) -> mkVoidPtrFromString t
-    AttrPtr (Bytes b)  -> mkVoidPtrFromBytes b
-
-    where mkVoidPtrFromLong v = do
-            fptr <- mallocForeignPtr
-            withForeignPtr fptr (\ptr -> poke ptr v) 
-            pure (castForeignPtr fptr, 0)
-
-          -- TODO: Validate the following funs
-          mkVoidPtrFromString t = do
-            let (fptr, _, len) = BI.toForeignPtr t
-            pure (castForeignPtr fptr, fromIntegral len)
-            
-          mkVoidPtrFromBytes b = do
-            let (fptr, _, len) = BI.toForeignPtr b
-            pure (castForeignPtr fptr, fromIntegral len)
-            
-data AttrValuePtr =
-    AttrValue C.CULong
-  | AttrPtr   AttrPtrType
-  deriving (Show, Eq)
-
-data AttrPtrType =
-    String ByteString -- ^ CHAR8
-  | Bytes ByteString
-  -- | EvHandle SQLEVENT
-  -- | WinHandle SQLWINDOW
-  deriving (Show, Eq)
-
-data ConnectAttr = ConnectAttr { getConnectAttr :: C.CInt
-                               , attrValuePtr   :: AttrValuePtr
-                               }
-                 deriving (Show, Eq)
 
 data SQLHENV
 data SQLHDBC
@@ -271,11 +234,9 @@ connect connInfo = do
   where
     setAttrs hdbcp hdbc = go
        where go connAttr = do
-               let -- TODO: getConnectAttr is a CInt
-                   -- but SQLSetConnectAttr expects a CLong
-                   attr = fromIntegral (getConnectAttr connAttr)
+               let 
                -- TODO: Note void* next to SQLPOINTER, antiquoter gave a parse error.
-               (vptr, len) <- connectAttrPtr connAttr
+               (attr, vptr, len) <- connectAttrPtr connAttr
                ret <- ResIndicator <$> [C.block| int {
                     SQLRETURN ret = 0;
                     SQLHDBC* hdbcp = $(SQLHDBC* hdbcp);
@@ -287,9 +248,12 @@ connect connInfo = do
                     }|]        
                when (not (isSuccessful ret)) $
                  getErrors ret (SQLDBCRef hdbc) >>= throwSQLException
-              
+    setAttrsBeforeConnect :: Ptr (Ptr SQLHDBC) -> Ptr SQLHDBC -> ConnectAttr 'ConnectBefore -> IO ()
     setAttrsBeforeConnect = setAttrs
+
+    setAttrsAfterConnect :: Ptr (Ptr SQLHDBC) -> Ptr SQLHDBC -> ConnectAttr 'ConnectAfter -> IO ()
     setAttrsAfterConnect  = setAttrs
+
     doConnect henvp hdbcp = do
       (ctxt, i16) <- asForeignPtr $
         ppConnectionString (connectionString connInfo)
@@ -2316,257 +2280,6 @@ pattern SQL_HANDLE_DESC <- ((HandleType [C.pure| int {SQL_HANDLE_DESC} |] ==) ->
  :: HandleType
  #-}
 #endif
-
-attrValue :: AttrValuePtr -> Maybe C.CULong
-attrValue avp =
-  case avp of
-    AttrValue v -> Just v
-    _           -> Nothing
-
-attrPtr :: AttrValuePtr -> Maybe AttrPtrType
-attrPtr avp =
-  case avp of
-    AttrPtr v -> Just v
-    _         -> Nothing
-
-attrPtrString :: AttrPtrType -> Maybe ByteString
-attrPtrString (String t) = Just t
-attrPtrString _          = Nothing
-
-attrPtrBytes :: AttrPtrType -> Maybe ByteString
-attrPtrBytes (Bytes t) = Just t
-attrPtrBytes _         = Nothing
-
-attrWithStringMaybePat :: C.CInt -> ConnectAttr -> Maybe ByteString
-attrWithStringMaybePat a attr =
-  if a == getConnectAttr attr
-  then attrPtrString =<< attrPtr (attrValuePtr attr)
-  else Nothing
-
-attrWithBytesMaybePat :: C.CInt -> ConnectAttr -> Maybe ByteString
-attrWithBytesMaybePat a attr =
-  if a == getConnectAttr attr
-  then attrPtrBytes =<< attrPtr (attrValuePtr attr)
-  else Nothing
-
-attrWithValueMaybePat :: C.CInt -> ConnectAttr -> Maybe C.CULong
-attrWithValueMaybePat a attr =
-  if a == getConnectAttr attr
-  then attrValue (attrValuePtr attr)
-  else Nothing
-
-attrWithValuePat :: C.CInt -> C.CULong -> ConnectAttr -> Bool
-attrWithValuePat a v attr = attrWithValue a v == attr
-
-attrWithValue :: C.CInt -> C.CULong -> ConnectAttr
-attrWithValue a v = ConnectAttr a (AttrValue v)
-
-attrWithString :: C.CInt -> ByteString -> ConnectAttr
-attrWithString a v = ConnectAttr a (AttrPtr (String v))
-
-attrWithBytes :: C.CInt -> ByteString -> ConnectAttr
-attrWithBytes a v = ConnectAttr a (AttrPtr (Bytes v))
-
-pattern SQL_ATTR_ACCESS_MODE_READ_ONLY :: ConnectAttr
-pattern SQL_ATTR_ACCESS_MODE_READ_ONLY <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ACCESS_MODE} |] [C.pure| SQLUINTEGER { SQL_MODE_READ_ONLY } |] -> True) where
-  SQL_ATTR_ACCESS_MODE_READ_ONLY = attrWithValue [C.pure| int {SQL_ATTR_ACCESS_MODE} |] [C.pure| SQLUINTEGER { SQL_MODE_READ_ONLY } |]
-
-pattern SQL_ATTR_ACCESS_MODE_READ_WRITE :: ConnectAttr
-pattern SQL_ATTR_ACCESS_MODE_READ_WRITE <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ACCESS_MODE} |] [C.pure| SQLUINTEGER { SQL_MODE_READ_WRITE } |] -> True) where
-  SQL_ATTR_ACCESS_MODE_READ_WRITE = attrWithValue [C.pure| int {SQL_ATTR_ACCESS_MODE} |] [C.pure| SQLUINTEGER { SQL_MODE_READ_WRITE } |]
-
--- SQL_ATTR_ASYNC_DBC_EVENT
--- SQL_ATTR_DBC_FUNCTIONS_ENABLE
--- SQL_ATTR_ASYNC_DBC_PCALLBACK [Only driver manager can call]
--- SQL_ATTR_ASYNC_DBC_PCONTEXT  [Only driver manager can call]
-
-pattern SQL_ATTR_ASYNC_ENABLE_ON :: ConnectAttr
-pattern SQL_ATTR_ASYNC_ENABLE_ON <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ASYNC_ENABLE} |] [C.pure| SQLULEN {SQL_ASYNC_ENABLE_ON} |] -> True) where
-  SQL_ATTR_ASYNC_ENABLE_ON = attrWithValue [C.pure| int {SQL_ATTR_ASYNC_ENABLE} |] [C.pure| SQLUINTEGER {SQL_ASYNC_ENABLE_ON} |]
-
-pattern SQL_ATTR_ASYNC_ENABLE_OFF :: ConnectAttr
-pattern SQL_ATTR_ASYNC_ENABLE_OFF <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ASYNC_ENABLE} |] [C.pure| SQLULEN {SQL_ASYNC_ENABLE_OFF} |] -> True) where
-  SQL_ATTR_ASYNC_ENABLE_OFF = attrWithValue [C.pure| int {SQL_ATTR_ASYNC_ENABLE} |] [C.pure| SQLUINTEGER {SQL_ASYNC_ENABLE_OFF} |]
-
--- SQL_ATTR_AUTO_IPD cannot be set by SQLSetConnectAttr
--- should SQL_ATTR_AUTOCOMMIT be exposed?
--- SQL_ATTR_CONNECTION_DEAD read only
-
-pattern SQL_ATTR_CONNECTION_TIMEOUT :: CULong -> ConnectAttr
-pattern SQL_ATTR_CONNECTION_TIMEOUT i <-
-  (attrWithValueMaybePat [C.pure| int {SQL_ATTR_CONNECTION_TIMEOUT} |] -> Just i) where
-  SQL_ATTR_CONNECTION_TIMEOUT i = attrWithValue [C.pure| int {SQL_ATTR_CONNECTION_TIMEOUT} |] i
-
-pattern SQL_ATTR_CURRENT_CATALOG :: ByteString -> ConnectAttr
-pattern SQL_ATTR_CURRENT_CATALOG i <-
-  (attrWithStringMaybePat [C.pure| int {SQL_ATTR_CURRENT_CATALOG} |] -> Just i) where
-  SQL_ATTR_CURRENT_CATALOG i = attrWithString [C.pure| int {SQL_ATTR_CURRENT_CATALOG} |] i
-
--- SQL_DBC_INFO_TOKEN 
--- SQL_ATTR_ENLIST_IN_DTC
-
-pattern SQL_ATTR_LOGIN_TIMEOUT :: CULong -> ConnectAttr
-pattern SQL_ATTR_LOGIN_TIMEOUT i <-
-  (attrWithValueMaybePat [C.pure| int {SQL_ATTR_LOGIN_TIMEOUT} |] -> Just i) where
-  SQL_ATTR_LOGIN_TIMEOUT i = attrWithValue [C.pure| int {SQL_ATTR_LOGIN_TIMEOUT} |] i
-
-pattern SQL_ATTR_METADATA_ID :: CULong -> ConnectAttr
-pattern SQL_ATTR_METADATA_ID i <-
-  (attrWithValueMaybePat [C.pure| int {SQL_ATTR_METADATA_ID} |] -> Just i) where
-  SQL_ATTR_METADATA_ID i = attrWithValue [C.pure| int {SQL_ATTR_METADATA_ID} |] i
-
-pattern SQL_ATTR_ODBC_CURSORS_CUR_USE_IF_NEEDED :: ConnectAttr
-pattern SQL_ATTR_ODBC_CURSORS_CUR_USE_IF_NEEDED <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ODBC_CURSORS} |] [C.pure| SQLULEN { SQL_CUR_USE_IF_NEEDED } |] -> True) where
-  SQL_ATTR_ODBC_CURSORS_CUR_USE_IF_NEEDED = attrWithValue [C.pure| int {SQL_ATTR_ODBC_CURSORS} |] [C.pure| SQLULEN { SQL_CUR_USE_IF_NEEDED } |]
-
-pattern SQL_ATTR_ODBC_CURSORS_CUR_USE_ODBC :: ConnectAttr
-pattern SQL_ATTR_ODBC_CURSORS_CUR_USE_ODBC <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ODBC_CURSORS} |] [C.pure| SQLULEN { SQL_CUR_USE_ODBC } |] -> True) where
-  SQL_ATTR_ODBC_CURSORS_CUR_USE_ODBC = attrWithValue [C.pure| int {SQL_ATTR_ODBC_CURSORS} |] [C.pure| SQLULEN { SQL_CUR_USE_ODBC } |]
-
-pattern SQL_ATTR_ODBC_CURSORS_CUR_USE_DRIVER :: ConnectAttr
-pattern SQL_ATTR_ODBC_CURSORS_CUR_USE_DRIVER <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_ODBC_CURSORS} |] [C.pure| SQLULEN { SQL_CUR_USE_DRIVER } |] -> True) where
-  SQL_ATTR_ODBC_CURSORS_CUR_USE_DRIVER = attrWithValue [C.pure| int {SQL_ATTR_ODBC_CURSORS} |] [C.pure| SQLULEN { SQL_CUR_USE_DRIVER } |]
-
-pattern SQL_ATTR_PACKET_SIZE :: CULong -> ConnectAttr
-pattern SQL_ATTR_PACKET_SIZE i <-
-  (attrWithValueMaybePat [C.pure| int {SQL_ATTR_PACKET_SIZE} |] -> Just i) where
-  SQL_ATTR_PACKET_SIZE i = attrWithValue [C.pure| int {SQL_ATTR_PACKET_SIZE} |] i
-
--- SQL_ATTR_QUIET_MODE
-
-pattern SQL_ATTR_TRACE_ON :: ConnectAttr
-pattern SQL_ATTR_TRACE_ON <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_TRACE} |] [C.pure| SQLUINTEGER { SQL_OPT_TRACE_ON } |] -> True) where
-  SQL_ATTR_TRACE_ON = attrWithValue [C.pure| int {SQL_ATTR_TRACE} |] [C.pure| SQLUINTEGER { SQL_OPT_TRACE_ON } |]
-
-pattern SQL_ATTR_TRACE_OFF :: ConnectAttr
-pattern SQL_ATTR_TRACE_OFF <-
-  (attrWithValuePat [C.pure| int {SQL_ATTR_TRACE} |] [C.pure| SQLUINTEGER { SQL_OPT_TRACE_OFF } |] -> True) where
-  SQL_ATTR_TRACE_OFF = attrWithValue [C.pure| int {SQL_ATTR_TRACE} |] [C.pure| SQLUINTEGER { SQL_OPT_TRACE_OFF } |]
-
-pattern SQL_ATTR_TRACEFILE :: ByteString -> ConnectAttr
-pattern SQL_ATTR_TRACEFILE i <-
-  (attrWithStringMaybePat [C.pure| int {SQL_ATTR_TRACEFILE} |] -> Just i) where
-  SQL_ATTR_TRACEFILE i = attrWithString [C.pure| int {SQL_ATTR_TRACEFILE} |] i
-
-pattern SQL_ATTR_TRANSLATE_LIB :: ByteString -> ConnectAttr
-pattern SQL_ATTR_TRANSLATE_LIB i <-
-  (attrWithStringMaybePat [C.pure| int {SQL_ATTR_TRANSLATE_LIB} |] -> Just i) where
-  SQL_ATTR_TRANSLATE_LIB i = attrWithString [C.pure| int {SQL_ATTR_TRANSLATE_LIB} |] i
-
-pattern SQL_ATTR_TRANSLATE_OPTION :: ByteString -> ConnectAttr
-pattern SQL_ATTR_TRANSLATE_OPTION i <-
-  (attrWithBytesMaybePat [C.pure| int {SQL_ATTR_TRANSLATE_OPTION} |] -> Just i) where
-  SQL_ATTR_TRANSLATE_OPTION i = attrWithBytes [C.pure| int {SQL_ATTR_TRANSLATE_OPTION} |] i
-
-pattern SQL_ATTR_TXN_ISOLATION :: ByteString -> ConnectAttr
-pattern SQL_ATTR_TXN_ISOLATION i <-
-  (attrWithBytesMaybePat [C.pure| int {SQL_ATTR_TXN_ISOLATION} |] -> Just i) where
-  SQL_ATTR_TXN_ISOLATION i = attrWithBytes [C.pure| int {SQL_ATTR_TXN_ISOLATION} |] i
-
-{-
-pattern SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE :: ConnectAttr
-#ifdef mingw32_HOST_OS
-pattern SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE <- ((const True) -> False)
-# else
-pattern SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE v <- (withUnsafeAttrValue -> Just v) where
-  SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE i = ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE} |] (AttrValue i)
-#endif  
-  
-pattern SQL_ATTR_AUTOCOMMIT :: ConnectAttr
-pattern SQL_ATTR_AUTOCOMMIT <- ((ConnectAttr [C.pure| int {SQL_ATTR_AUTOCOMMIT} |] ==) -> True) where
-  SQL_ATTR_AUTOCOMMIT = ConnectAttr [C.pure| int {SQL_ATTR_AUTOCOMMIT} |]
-
-pattern SQL_ATTR_DISCONNECT_BEHAVIOR :: ConnectAttr
-pattern SQL_ATTR_DISCONNECT_BEHAVIOR <- ((ConnectAttr [C.pure| int {SQL_ATTR_DISCONNECT_BEHAVIOR} |] ==) -> True) where
-  SQL_ATTR_DISCONNECT_BEHAVIOR = ConnectAttr [C.pure| int {SQL_ATTR_DISCONNECT_BEHAVIOR} |]
-
-pattern SQL_ATTR_ENLIST_IN_DTC :: ConnectAttr
-pattern SQL_ATTR_ENLIST_IN_DTC <- ((ConnectAttr [C.pure| int {SQL_ATTR_ENLIST_IN_DTC} |] ==) -> True) where
-  SQL_ATTR_ENLIST_IN_DTC = ConnectAttr [C.pure| int {SQL_ATTR_ENLIST_IN_DTC} |]
-
-pattern SQL_ATTR_ENLIST_IN_XA :: ConnectAttr
-pattern SQL_ATTR_ENLIST_IN_XA <- ((ConnectAttr [C.pure| int {SQL_ATTR_ENLIST_IN_XA} |] ==) -> True) where
-  SQL_ATTR_ENLIST_IN_XA = ConnectAttr [C.pure| int {SQL_ATTR_ENLIST_IN_XA} |]
-
-pattern SQL_ATTR_QUIET_MODE :: ConnectAttr
-pattern SQL_ATTR_QUIET_MODE <- ((ConnectAttr [C.pure| int {SQL_ATTR_QUIET_MODE} |] ==) -> True) where
-  SQL_ATTR_QUIET_MODE = ConnectAttr [C.pure| int {SQL_ATTR_QUIET_MODE} |]
-
-pattern SQL_ATTR_AUTO_IPD :: ConnectAttr
-pattern SQL_ATTR_AUTO_IPD <- ((ConnectAttr [C.pure| int {SQL_ATTR_AUTO_IPD} |] ==) -> True) where
-  SQL_ATTR_AUTO_IPD = ConnectAttr [C.pure| int {SQL_ATTR_AUTO_IPD} |]
-
--}
-
-{-
-pattern SQL_ATTR_ASYNC_DBC_PCONTEXT :: ConnectAttr
-pattern SQL_ATTR_ASYNC_DBC_PCONTEXT <- ((ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_PCONTEXT} |] ==) -> True) where
-  SQL_ATTR_ASYNC_DBC_PCONTEXT = ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_PCONTEXT} |]
-
-pattern SQL_ATTR_ASYNC_DBC_PCALLBACK :: ConnectAttr
-pattern SQL_ATTR_ASYNC_DBC_PCALLBACK <- ((ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_PCALLBACK} |] ==) -> True) where
-  SQL_ATTR_ASYNC_DBC_PCALLBACK = ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_PCALLBACK} |]
-  
-pattern SQL_ATTR_ASYNC_DBC_EVENT :: ConnectAttr
-pattern SQL_ATTR_ASYNC_DBC_EVENT <- ((ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_EVENT} |] ==) -> True) where
-  SQL_ATTR_ASYNC_DBC_EVENT = ConnectAttr [C.pure| int {SQL_ATTR_ASYNC_DBC_EVENT} |]
-
--}
-
-#if __GLASGOW_HASKELL__ >= 802
-{-# COMPLETE
-   SQL_ATTR_ACCESS_MODE_READ_ONLY
- , SQL_ATTR_ACCESS_MODE_READ_WRITE
- , SQL_ATTR_ASYNC_ENABLE_ON
- , SQL_ATTR_ASYNC_ENABLE_OFF
- , SQL_ATTR_CONNECTION_TIMEOUT
- , SQL_ATTR_CURRENT_CATALOG
- , SQL_ATTR_LOGIN_TIMEOUT
- , SQL_ATTR_METADATA_ID
- , SQL_ATTR_ODBC_CURSORS_CUR_USE_IF_NEEDED
- , SQL_ATTR_ODBC_CURSORS_CUR_USE_ODBC
- , SQL_ATTR_ODBC_CURSORS_CUR_USE_DRIVER
- , SQL_ATTR_PACKET_SIZE
- , SQL_ATTR_TRACE_ON
- , SQL_ATTR_TRACE_OFF
- , SQL_ATTR_TRANSLATE_LIB
- , SQL_ATTR_TRANSLATE_OPTION
- , SQL_ATTR_TXN_ISOLATION
- :: ConnectAttr
- #-}
-#endif
-
-{-
-
- , SQL_ATTR_AUTOCOMMIT
- , SQL_ATTR_CONNECTION_TIMEOUT
- , SQL_ATTR_CURRENT_CATALOG
- , SQL_ATTR_DISCONNECT_BEHAVIOR
- , SQL_ATTR_ENLIST_IN_DTC
- , SQL_ATTR_ENLIST_IN_XA
- , SQL_ATTR_LOGIN_TIMEOUT
- , SQL_ATTR_LOGIN_TIMEOUT
- , SQL_ATTR_ODBC_CURSORS
- , SQL_ATTR_PACKET_SIZE
- , SQL_ATTR_QUIET_MODE
- , SQL_ATTR_TRACE
- , SQL_ATTR_TRACEFILE
- , SQL_ATTR_TRANSLATE_LIB
- , SQL_ATTR_TRANSLATE_OPTION
- , SQL_ATTR_TXN_ISOLATION
- , SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE
- , SQL_ATTR_ASYNC_ENABLE
- , SQL_ATTR_AUTO_IPD
- , SQL_ATTR_METADATA_ID
--}
 
 newtype NullableFieldDesc = NullableFieldDesc C.CShort
   deriving (Show, Read, Eq, Storable)
