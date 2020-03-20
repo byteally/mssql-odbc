@@ -450,17 +450,17 @@ sqlGetConnectAttr hdbcp attr vptr len outLenPtr =
       } |]
 
   
-extractVal :: Storable t => ColBufferType 'ColBind t -> IO t
+extractVal :: Storable t => ColBufferType 'BindCol t -> IO t
 extractVal cbuff = case cbuff of
-  ColBindBuffer _ cbuffPtr -> withForeignPtr cbuffPtr peek
+  BindColBuffer _ cbuffPtr -> withForeignPtr cbuffPtr peek
 
 extractWith ::
   Storable t =>
-  ColBufferType 'ColBind t ->
+  ColBufferType 'BindCol t ->
   (CLong -> Ptr t -> IO b) ->
   IO b
 extractWith cbuff f = case cbuff of
-  ColBindBuffer bufSizeFP cbuffPtr -> do
+  BindColBuffer bufSizeFP cbuffPtr -> do
     bufSize <- peekFP bufSizeFP
     withForeignPtr cbuffPtr (f bufSize)
 
@@ -469,8 +469,8 @@ castColBufferPtr ::
   ColBufferType bt t1 ->
   ColBufferType bt t2
 castColBufferPtr cbuff = case cbuff of
-  ColBindBuffer lenOrIndFP cbuffPtr ->
-    ColBindBuffer lenOrIndFP (castForeignPtr cbuffPtr)
+  BindColBuffer lenOrIndFP cbuffPtr ->
+    BindColBuffer lenOrIndFP (castForeignPtr cbuffPtr)
   GetDataUnboundBuffer k ->
     GetDataUnboundBuffer (\a accf -> k a $
                        \bf l -> accf bf l . castPtr)
@@ -665,7 +665,7 @@ class ( SQLBindCol ((ColBuffer (FieldBufferType t)))
   fromField :: ColBuffer (FieldBufferType t) -> IO t
 
 instance FromField Int where
-  type FieldBufferType Int = CColBind CBigInt
+  type FieldBufferType Int = CBindCol CBigInt
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
   
 {-
@@ -675,44 +675,44 @@ instance FromField Int8 where
 -}
   
 instance FromField Int16 where
-  type FieldBufferType Int16 = CColBind CSmallInt 
+  type FieldBufferType Int16 = CBindCol CSmallInt 
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
 
 instance FromField Int32 where
-  type FieldBufferType Int32 = CColBind CLong
+  type FieldBufferType Int32 = CBindCol CLong
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
 
 instance FromField Int64 where
-  type FieldBufferType Int64 = CColBind CBigInt
+  type FieldBufferType Int64 = CBindCol CBigInt
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
 
 {-
 instance FromField Word where
-  type FieldBufferType Word = CColBind CUBigInt
+  type FieldBufferType Word = CBindCol CUBigInt
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
 -}
 
 instance FromField Word8 where
-  type FieldBufferType Word8 = CColBind CUTinyInt
+  type FieldBufferType Word8 = CBindCol CUTinyInt
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
 
 {-
 instance FromField Word16 where
-  type FieldBufferType Word16 = CColBind CUSmallInt
+  type FieldBufferType Word16 = CBindCol CUSmallInt
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
 
 instance FromField Word32 where
-  type FieldBufferType Word32 = CColBind CULong
+  type FieldBufferType Word32 = CBindCol CULong
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
 
 instance FromField Word64 where
-  type FieldBufferType Word64 = CColBind CUBigInt
+  type FieldBufferType Word64 = CBindCol CUBigInt
   fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)  
 -}
 
 {-
 instance (KnownNat n) => FromField (Sized n T.Text) where
-  type FieldBufferType (Sized n T.Text) = CColBind (CSized n CWchar)
+  type FieldBufferType (Sized n T.Text) = CBindCol (CSized n CWchar)
   fromField = \v -> do
     extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
       putStrLn $ "BufSize: " ++ show bufSize      
@@ -720,22 +720,22 @@ instance (KnownNat n) => FromField (Sized n T.Text) where
       coerce <$> T.fromPtr (coerce (cwcharP :: Ptr CWchar)) (fromIntegral clen)      
 
 instance (KnownNat n) => FromField (Sized n ASCIIText) where
-  type FieldBufferType (Sized n ASCIIText) = CColBind (CSized n CChar)
+  type FieldBufferType (Sized n ASCIIText) = CBindCol (CSized n CChar)
   fromField = \v -> do
     extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
       (Sized . ASCIIText . T.pack) <$> Foreign.C.peekCStringLen (ccharP, fromIntegral bufSize)
 -}
 
 instance FromField Double where
-  type FieldBufferType Double = CColBind CDouble
+  type FieldBufferType Double = CBindCol CDouble
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
 
 instance FromField Float where
-  type FieldBufferType Float = CColBind CFloat
+  type FieldBufferType Float = CBindCol CFloat
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
 
 instance FromField Bool where
-  type FieldBufferType Bool = CColBind CBool
+  type FieldBufferType Bool = CBindCol CBool
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ if v == 1 then True else False)
 
 newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
@@ -789,7 +789,7 @@ instance FromField T.Text where
 
 {-
 instance FromField Money where
-  type FieldBufferType Money = CColBind (CDecimal CChar)
+  type FieldBufferType Money = CBindCol (CDecimal CChar)
   fromField = \v -> do
     bs <- extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
         BS.packCStringLen (ccharP, fromIntegral bufSize)
@@ -798,28 +798,28 @@ instance FromField Money where
           (pure . Money) (readMaybe $ res)
 
 instance FromField SmallMoney where
-  type FieldBufferType SmallMoney = CColBind (CDecimal CDouble)
+  type FieldBufferType SmallMoney = CBindCol (CDecimal CDouble)
   fromField = \v -> do
-    extractVal (castColBufferPtr (getColBuffer v) :: ColBufferType 'ColBind CDouble) >>= (pure . SmallMoney . fromFloatDigits)
+    extractVal (castColBufferPtr (getColBuffer v) :: ColBufferType 'BindCol CDouble) >>= (pure . SmallMoney . fromFloatDigits)
 -}
 
 instance FromField Day where
-  type FieldBufferType Day = CColBind CDate
+  type FieldBufferType Day = CBindCol CDate
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getDate (coerce v))
 
 instance FromField TimeOfDay where
-  type FieldBufferType TimeOfDay = CColBind CTimeOfDay
+  type FieldBufferType TimeOfDay = CBindCol CTimeOfDay
   fromField = \i -> do
     extractWith (getColBuffer i) $ \_ v -> do
       v' <- peek (coerce v)
       pure $ getTimeOfDay v'
       
 instance FromField LocalTime where
-  type FieldBufferType LocalTime = CColBind CLocalTime
+  type FieldBufferType LocalTime = CBindCol CLocalTime
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getLocalTime (coerce v))
 
 instance FromField ZonedTime where
-  type FieldBufferType ZonedTime = CColBind CZonedTime
+  type FieldBufferType ZonedTime = CBindCol CZonedTime
   fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ Database.MSSQL.Internal.SQLTypes.getZonedTime (coerce v))
 
 instance FromField UTCTime where
@@ -827,7 +827,7 @@ instance FromField UTCTime where
   fromField = \v -> zonedTimeToUTC <$> fromField v
 
 instance FromField UUID where
-  type FieldBufferType UUID = CColBind UUID
+  type FieldBufferType UUID = CBindCol UUID
   fromField = \i -> extractVal (castColBufferPtr (getColBuffer i))
 
 -- NOTE: There is no generic lengthOrIndicatorFP
@@ -835,7 +835,7 @@ instance FromField a => FromField (Maybe a) where
   type FieldBufferType (Maybe a) = FieldBufferType a
   fromField = \v -> do
     case getColBuffer v of
-      ColBindBuffer fptr _ -> do 
+      BindColBuffer fptr _ -> do 
         lengthOrIndicator <- peekFP fptr
         if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
           then pure Nothing

@@ -156,16 +156,16 @@ newtype SQLUnbound a = SQLUnbound { getSQLUnbound :: a }
                      deriving (Show, Generic, Eq, Num)
 
 instance FromField (SQLBound B.ByteString) where
-  type FieldBufferType (SQLBound B.ByteString) = CColBind CBinary  
+  type FieldBufferType (SQLBound B.ByteString) = CBindCol CBinary  
   fromField = \i -> case (getColBuffer i) of
-    ColBindBuffer byteCountFP bytesFP -> do
+    BindColBuffer byteCountFP bytesFP -> do
       byteCount <- peekFP byteCountFP
       pure (SQLBound $ B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
 
 instance FromField (SQLBound T.Text) where
-  type FieldBufferType (SQLBound T.Text) = CColBind CWchar
+  type FieldBufferType (SQLBound T.Text) = CBindCol CWchar
   fromField = \i -> case (getColBuffer i) of
-    ColBindBuffer charCountFP textFP -> do
+    BindColBuffer charCountFP textFP -> do
       charCount <- peekFP charCountFP
       a <- withForeignPtr textFP $ \cwcharP -> F.peekCWStringLen (coerce cwcharP, fromIntegral charCount)
       putStrLn $ "charCount : " ++ show (a, charCount)

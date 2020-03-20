@@ -54,7 +54,6 @@ data Connection = Connection
   , _hdbc :: Ptr SQLHDBC
   } deriving (Show)
 
-
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
   , ("SQLCHAR", [t|CChar|]) 
@@ -212,21 +211,21 @@ newtype ColBuffer t = ColBuffer
   } 
 
 data ColBufferTypeK =
-    ColBind
+    BindCol
   | GetDataBound
   | GetDataUnbound
   
 data ColBufferType (k :: ColBufferTypeK) t where
-  ColBindBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'ColBind t
+  BindColBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'BindCol t
   GetDataBoundBuffer :: IO (ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataBound t
   GetDataUnboundBuffer :: (forall a. a -> (CLong -> CLong -> Ptr t -> a -> IO a) -> IO a) -> ColBufferType 'GetDataUnbound t
 
 type family GetColBufferType t where
   GetColBufferType (CGetDataUnbound _) = 'GetDataUnbound
   GetColBufferType (CGetDataBound _)   = 'GetDataBound
-  GetColBufferType (CColBind _)        = 'ColBind
+  GetColBufferType (CBindCol _)        = 'BindCol
 
-newtype CColBind a = CColBind { getCColBind :: a }
+newtype CBindCol a = CBindCol { getCBindCol :: a }
                    deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
 newtype CGetDataBound a = CGetDataBound { getCGetDataBound :: a }
