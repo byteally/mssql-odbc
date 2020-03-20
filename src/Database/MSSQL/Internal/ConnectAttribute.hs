@@ -64,6 +64,7 @@ import Foreign.C.Types
 import Foreign.Storable
 import qualified Language.C.Inline as C
 import Database.MSSQL.Internal.Ctx
+import Database.MSSQL.Internal.Types
 
 C.context $ mssqlCtx
   [ ("SQLUINTEGER", [t|CULong|])
@@ -118,32 +119,6 @@ getConnectAttrPtr attr vptr lenPtr =
     SQL_ATTR_NAME_TRANSLATE_OPTION -> Just <$> attrWithBytesPtr SQL_ATTR_NAME_TRANSLATE_OPTION vptr lenPtr
     SQL_ATTR_NAME_TXN_ISOLATION -> Just <$> attrWithBytesPtr SQL_ATTR_NAME_TXN_ISOLATION vptr lenPtr
     _ -> pure Nothing
-
-            
-data AttrValuePtr =
-    AttrValue CULong
-  | AttrPtr   AttrPtrType
-  deriving (Show, Eq)
-
-data AttrPtrType =
-    String ByteString -- ^ CHAR8
-  | Bytes ByteString
-  -- | EvHandle SQLEVENT
-  -- | WinHandle SQLWINDOW
-  deriving (Show, Eq)
-
-data ConnectAttrAt =
-    ConnectBefore
-  | ConnectAfter
-
-data ConnectAttr (at :: ConnectAttrAt)
-  = ConnectAttr
-  { getConnectAttrName :: AttrName
-  , attrValuePtr :: AttrValuePtr
-  } deriving (Show, Eq)
-
-newtype AttrName = AttrName { getAttrName :: CLong }
-             deriving (Show, Eq, Storable, Integral, Real, Enum, Num, Ord)
 
 attrNameEq :: CLong -> AttrName -> Bool
 attrNameEq a b = AttrName a == b

@@ -43,8 +43,8 @@ test_bindColUnboundRoundTrip =
     -- testProperty "text" $ withTests 1 $ textProp r
   ]
 
-_test_bindColBoundRoundTrip :: TestTree
-_test_bindColBoundRoundTrip =
+test_bindColBoundRoundTrip :: TestTree
+test_bindColBoundRoundTrip =
   withResource (connect testConnectInfo)
                 disconnect $ \r -> 
   testGroup "SQLBindcol bound round trip tests"
@@ -156,14 +156,14 @@ newtype SQLUnbound a = SQLUnbound { getSQLUnbound :: a }
                      deriving (Show, Generic, Eq, Num)
 
 instance FromField (SQLBound B.ByteString) where
-  type FieldBufferType (SQLBound B.ByteString) = CBinary  
+  type FieldBufferType (SQLBound B.ByteString) = CColBind CBinary  
   fromField = \i -> case (getColBuffer i) of
     ColBindBuffer byteCountFP bytesFP -> do
       byteCount <- peekFP byteCountFP
       pure (SQLBound $ B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
 
 instance FromField (SQLBound T.Text) where
-  type FieldBufferType (SQLBound T.Text) = CWchar
+  type FieldBufferType (SQLBound T.Text) = CColBind CWchar
   fromField = \i -> case (getColBuffer i) of
     ColBindBuffer charCountFP textFP -> do
       charCount <- peekFP charCountFP
