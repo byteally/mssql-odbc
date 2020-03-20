@@ -84,7 +84,6 @@ instance FromRow TestT1
 uc ::String
 uc = "🌀"
 
-
 data Album = Album Int32 Text Int32
            deriving (Generic, Show)
 
@@ -102,6 +101,35 @@ data DT_Overflow = DT_Overflow { dto1 :: Int, dto2 :: Double }
 instance FromRow DT_Overflow where
   -- fromRow = DT_Overflow <*> field <*> field
 
+unit_transaction_test :: IO ()
+unit_transaction_test = do
+  let conInfo = testConnectInfo
+  con <- connect conInfo
+  execute con "delete from test"  
+  withTransaction con $ do
+    execute con "insert into test (value) values (1)"
+  (vs :: Vector (Identity Int32)) <- query con "select value from test"  
+  disconnect con
+  pure (pure 1) @=? vs  
+  pure ()
+
+unit_transaction_prim_test :: IO ()
+unit_transaction_prim_test = do
+  let conInfo = testConnectInfo
+  con <- connect conInfo
+  execute con "delete from test"
+  sqlSetAutoCommitOff (_hdbc con)
+  execute con "insert into test (value) values (1)"
+  rollback (_hdbc con)
+  (vs :: Vector (Identity Int32)) <- query con "select value from test"
+  mempty @=? vs
+  execute con "insert into test (value) values (1)"
+  commit (_hdbc con)
+  (vs :: Vector (Identity Int32)) <- query con "select value from test"
+  sqlSetAutoCommitOn (_hdbc con)  
+  disconnect con
+  pure (pure 1) @=? vs
+  
 _unit_instance_overflow :: IO ()
 _unit_instance_overflow = do
   let conInfo = testConnectInfo

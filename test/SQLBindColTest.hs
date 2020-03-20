@@ -43,8 +43,8 @@ test_bindColUnboundRoundTrip =
     -- testProperty "text" $ withTests 1 $ textProp r
   ]
 
-test_bindColBoundRoundTrip :: TestTree
-test_bindColBoundRoundTrip =
+_test_bindColBoundRoundTrip :: TestTree
+_test_bindColBoundRoundTrip =
   withResource (connect testConnectInfo)
                 disconnect $ \r -> 
   testGroup "SQLBindcol bound round trip tests"

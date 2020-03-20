@@ -167,6 +167,7 @@ C.context $ mssqlCtx
   , ("SQLHENV" , [t|Ptr SQLHENV|])
   , ("SQLHDBC" , [t|Ptr SQLHDBC|])
   , ("SQLHSTMT" , [t|Ptr SQLHSTMT|])
+  , ("SQLPOINTER" , [t|Ptr ()|])  
   , ("SQLSMALLINT", [t|CShort|])
   , ("SQLUSMALLINT", [t|CUShort|])
   , ("SQLREAL", [t|CFloat|])
@@ -232,27 +233,11 @@ connect connInfo = do
     alloca $ \(hdbcp :: Ptr (Ptr SQLHDBC)) -> do
       doConnect henvp hdbcp
   where
-    setAttrs hdbcp hdbc = go
-       where go connAttr = do
-               let 
-               -- TODO: Note void* next to SQLPOINTER, antiquoter gave a parse error.
-               (attr, vptr, len) <- connectAttrPtr connAttr
-               ret <- ResIndicator <$> [C.block| int {
-                    SQLRETURN ret = 0;
-                    SQLHDBC* hdbcp = $(SQLHDBC* hdbcp);
-                    SQLINTEGER attr = $(SQLINTEGER attr);
-                    SQLPOINTER vptr = $fptr-ptr:(void* vptr);
-                    SQLINTEGER len = $(SQLINTEGER len);      
-                    ret = SQLSetConnectAttr(*hdbcp, attr, vptr, len);
-                    return ret;
-                    }|]        
-               when (not (isSuccessful ret)) $
-                 getErrors ret (SQLDBCRef hdbc) >>= throwSQLException
-    setAttrsBeforeConnect :: Ptr (Ptr SQLHDBC) -> Ptr SQLHDBC -> ConnectAttr 'ConnectBefore -> IO ()
-    setAttrsBeforeConnect = setAttrs
+    setAttrsBeforeConnect :: Ptr SQLHDBC -> ConnectAttr 'ConnectBefore -> IO ()
+    setAttrsBeforeConnect = setConnectAttr
 
-    setAttrsAfterConnect :: Ptr (Ptr SQLHDBC) -> Ptr SQLHDBC -> ConnectAttr 'ConnectAfter -> IO ()
-    setAttrsAfterConnect  = setAttrs
+    setAttrsAfterConnect :: Ptr SQLHDBC -> ConnectAttr 'ConnectAfter -> IO ()
+    setAttrsAfterConnect  = setConnectAttr
 
     doConnect henvp hdbcp = do
       (ctxt, i16) <- asForeignPtr $
@@ -281,7 +266,7 @@ connect connInfo = do
 
       when (not (isSuccessful ret)) $
         getErrors ret (SQLDBCRef hdbc) >>= throwSQLException
-      mapM_ (setAttrsBeforeConnect hdbcp hdbc) (attrBefore connInfo)
+      mapM_ (setAttrsBeforeConnect hdbc) (attrBefore connInfo)
 
       ret' <- ResIndicator <$> [C.block| int {
         SQLRETURN ret = 0;
@@ -294,7 +279,7 @@ connect connInfo = do
         return ret;
         }|]
 
-      mapM_ (setAttrsAfterConnect hdbcp hdbc) (attrAfter connInfo)
+      mapM_ (setAttrsAfterConnect hdbc) (attrAfter connInfo)
       case isSuccessful ret' of
         False -> getErrors ret' (SQLDBCRef hdbc) >>= throwSQLException
         True -> pure $ Connection { _henv = henv, _hdbc = hdbc }
@@ -426,11 +411,10 @@ sqldirect _con hstmt sql = do
     return ret;
     }|]
   
-  case isSuccessful ret of
-    False -> getErrors ret (SQLSTMTRef hstmt) >>= throwSQLException
-    True -> do
-      colCount <- peekFP numResultColsFP
-      pure colCount
+  case ret of
+    SQL_SUCCESS -> peekFP numResultColsFP
+    SQL_NO_DATA -> peekFP numResultColsFP
+    _           -> getErrors ret (SQLSTMTRef hstmt) >>= throwSQLException
         
 allocHSTMT :: Connection -> IO (HSTMT a)
 allocHSTMT con = do
@@ -527,25 +511,52 @@ sqlGetInfo con _  = do
   where
     hdbc = _hdbc con
 
-withTransaction :: Connection -> (Connection -> IO a) -> IO a
-withTransaction conn@(Connection { _hdbc = hdbcp }) f = do
-  sqlSetAutoCommitOn hdbcp
-  go `onException` sqlRollback hdbcp
-     `finally` sqlSetAutoCommitOff hdbcp
-
+withTransaction :: Connection -> IO a -> IO a
+withTransaction (Connection { _hdbc = hdbcp }) io = do
+  sqlSetAutoCommitOff hdbcp
+  go `onException` rollback hdbcp
+     `finally` sqlSetAutoCommitOn hdbcp
   where go = do
-          a <- f conn
-          sqlCommit hdbcp
+          a <- io
+          commit hdbcp
           pure a
-  
+
+setConnectAttr :: Ptr SQLHDBC -> ConnectAttr a -> IO ()
+setConnectAttr _hdbcp _connAttr = pure () {-do
+  (attr, vptr, len) <- setConnectAttrPtr connAttr
+  ret <- sqlSetConnectAttr hdbcp attr vptr len
+  case isSuccessful ret of
+    False -> do
+      getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
+    True -> pure ()
+-}
+
+{-
+getConnectAttr :: Ptr SQLHDBC -> AttrName -> IO (Maybe (ConnectAttr a))
+getConnectAttr hdbcp attr = do
+  let clen = case isFixedSizeAttrValue attr of
+               -- NOTE: Fixed length types are either SQLULEN or
+               --       SQLUINTEGER. hence going with SQL_IS_UINTEGER.
+               True -> [C.pure| SQLINTEGER { SQL_IS_UINTEGER } |]
+
+               -- NOTE: Making a choice here. If this is not acceptable
+               --       call sqlGenConnectAttr manually.
+               False -> 100
+  vptr <- mallocForeignPtrBytes (fromIntegral clen)
+  outLenPtr <- mallocForeignPtr
+  -- TODO: Something about setting outLenPtr to 0 in doc.
+  ret <- sqlGetConnectAttr hdbcp (getAttrName attr) vptr clen outLenPtr
+  case isSuccessful ret of
+    False -> do
+      getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
+    True -> getConnectAttrPtr attr (castForeignPtr vptr) outLenPtr
+-}
+
 sqlSetAutoCommitOn :: Ptr SQLHDBC -> IO ()
 sqlSetAutoCommitOn hdbcp = do
-  ret <- ResIndicator <$> [C.block| int {
-      SQLRETURN ret = 0;
-      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
-      ret = SQLSetConnectAttr(hdbcp, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-      return ret;
-      } |]
+  ret <- sqlSetConnectAttr hdbcp [C.pure| SQLINTEGER { SQL_ATTR_AUTOCOMMIT } |]
+                          (intPtrToPtr (fromIntegral [C.pure| SQLUINTEGER { SQL_AUTOCOMMIT_ON }|]))
+                          [C.pure| SQLINTEGER { SQL_IS_UINTEGER } |]  
   case isSuccessful ret of
     False -> do
       getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
@@ -553,45 +564,65 @@ sqlSetAutoCommitOn hdbcp = do
 
 sqlSetAutoCommitOff :: Ptr SQLHDBC -> IO ()
 sqlSetAutoCommitOff hdbcp = do
-  ret <- ResIndicator <$> [C.block| int {
-      SQLRETURN ret = 0;
-      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
-      ret = SQLSetConnectAttr(hdbcp, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0);
-      return ret;
-      } |]
-
+  ret <- sqlSetConnectAttr hdbcp [C.pure| SQLINTEGER { SQL_ATTR_AUTOCOMMIT } |]
+                          (intPtrToPtr (fromIntegral [C.pure| SQLUINTEGER { SQL_AUTOCOMMIT_OFF }|]))
+                          [C.pure| SQLINTEGER { SQL_IS_UINTEGER } |]
   case isSuccessful ret of
     False -> do
       getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
     True -> pure ()
 
-sqlCommit :: Ptr SQLHDBC -> IO ()
-sqlCommit hdbcp = do
-  ret <- ResIndicator <$> [C.block| int {
-      SQLRETURN ret = 0;
-      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
-      ret = SQLEndTran(SQL_HANDLE_DBC, hdbcp, SQL_COMMIT);
-      return ret;
-      } |]
-
+commit :: Ptr SQLHDBC -> IO ()
+commit hdbcp = do
+  ret <- sqlEndTran hdbcp [C.pure| SQLSMALLINT { SQL_COMMIT } |]
   case isSuccessful ret of
     False -> do
       getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
     True -> pure ()
 
-sqlRollback :: Ptr SQLHDBC -> IO ()
-sqlRollback hdbcp = do
-  ret <- ResIndicator <$> [C.block| int {
-      SQLRETURN ret = 0;
-      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
-      ret = SQLEndTran(SQL_HANDLE_DBC, hdbcp, SQL_ROLLBACK);
-      return ret;
-      } |]
-
+rollback :: Ptr SQLHDBC -> IO ()
+rollback hdbcp = do
+  ret <- sqlEndTran hdbcp [C.pure| SQLSMALLINT { SQL_ROLLBACK } |]
   case isSuccessful ret of
     False -> do
       getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
     True -> pure ()
+
+sqlEndTran :: Ptr SQLHDBC -> CShort -> IO ResIndicator
+sqlEndTran hdbcp completionType = do
+  ResIndicator <$> [C.block| int {
+      SQLRETURN ret = 0;
+      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
+      SQLSMALLINT completion_type = $(SQLSMALLINT completionType);
+      ret = SQLEndTran(SQL_HANDLE_DBC, hdbcp, completion_type);
+      return ret;
+      } |]
+
+sqlSetConnectAttr :: Ptr SQLHDBC -> CLong -> Ptr () -> CLong -> IO ResIndicator
+sqlSetConnectAttr hdbcp attr vptr len = 
+  ResIndicator <$> [C.block| int {
+      SQLRETURN ret = 0;
+      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
+      SQLINTEGER attr = $(SQLINTEGER attr);
+      SQLPOINTER vptr =  $(SQLPOINTER vptr); 
+      SQLINTEGER len = $(SQLINTEGER len);      
+      ret = SQLSetConnectAttr(hdbcp, attr, vptr, len);
+      return ret;
+      } |]
+
+-- TODO: Note void* next to SQLPOINTER, antiquoter gave a parse error.
+sqlGetConnectAttr :: Ptr SQLHDBC -> CLong -> ForeignPtr () -> CLong -> ForeignPtr CLong -> IO ResIndicator
+sqlGetConnectAttr hdbcp attr vptr len outLenPtr =
+  ResIndicator <$> [C.block| int {
+      SQLRETURN ret = 0;
+      SQLHDBC hdbcp = $(SQLHDBC hdbcp);
+      SQLINTEGER attr = $(SQLINTEGER attr);
+      SQLPOINTER vptr = $fptr-ptr:(void* vptr);
+      SQLINTEGER len = $(SQLINTEGER len);
+      SQLINTEGER* outLenPtr = $fptr-ptr:(SQLINTEGER* outLenPtr);            
+      ret = SQLGetConnectAttr(hdbcp, attr, vptr, len, outLenPtr);
+      return ret;
+      } |]
 
 data ColDescriptor = ColDescriptor
   { colName         :: T.Text
