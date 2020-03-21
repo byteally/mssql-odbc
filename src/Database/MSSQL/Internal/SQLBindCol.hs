@@ -314,7 +314,7 @@ instance SQLBindCol CWchar where
                       }|]
                      case isSuccessful ret of
                        True -> do
-                           msgs <- getMessages (SQLSTMTRef hstmtP)
+                           -- msgs <- getMessages (SQLSTMTRef hstmtP)
                            lengthOrInd <- peekFP lenOrIndFP
                            {-
                            let actBufSize = case fromIntegral lengthOrInd of

@@ -790,7 +790,7 @@ instance FromField ASCIIText where
 
     where getDataTxt v' = do
             bsb <- unboundWith v' mempty $
-              \bufSize lenOrInd cwcharP acc -> do
+              \_bufSize lenOrInd cwcharP acc -> do
                 let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
                                    then Left () -- (bufSize `div` 2) - 2
                                    else Right lenOrInd
