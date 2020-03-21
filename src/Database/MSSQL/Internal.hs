@@ -36,8 +36,7 @@ import Database.MSSQL.Internal.Types
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Char8 as BS8
-import Data.ByteString.Builder (Builder)
+-- import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Builder as BSB
 import qualified Language.C.Inline as C
 import Foreign.Storable
@@ -57,7 +56,6 @@ import Data.IORef
 import Data.Word
 import Data.Int
 import GHC.Generics
-import Control.Monad.Trans.Reader (ReaderT (..))
 import Data.Time
 import Data.UUID.Types (UUID)
 import Database.MSSQL.Internal.SQLTypes
@@ -67,8 +65,6 @@ import Data.String
 #if __GLASGOW_HASKELL__ < 802
 import Data.Semigroup
 #endif
-import Data.Functor.Compose
-import Control.Applicative hiding ((<**>))
 import Data.Scientific
 import Data.Typeable
 -- import qualified Data.Text.Lazy.Builder as LTB
@@ -81,6 +77,7 @@ import Control.Exception (bracket, onException, finally)
 -- import Foreign.Marshal.Utils (fillBytes)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
+import qualified Data.ByteString.Internal as B
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
@@ -493,6 +490,9 @@ boundWith (GetDataBoundBuffer io) f = do
 newtype CSized (size :: Nat) a = CSized { getCSized :: a }
                               deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
+newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
+                  deriving (Show, Eq, Generic)
+
 instance (KnownNat n) => IsString (Sized n T.Text) where
   fromString = Sized . T.pack . lengthCheck
     where lengthCheck x = case length x > fromIntegral n of
@@ -583,7 +583,9 @@ queryWith :: forall r.RowParser r -> Connection -> Query -> IO (Vector r)
 queryWith (RowParser colBuf rowPFun) con q = do
   withHSTMT con $ \hstmt -> do
     nrcs <- sqldirect con (getHSTMT hstmt) q
-    colBuffer <- colBuf ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
+    -- TODO: Run descriptor function to decide on `bt`
+    let bt = SQLBind
+    colBuffer <- colBuf bt ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
     (rows, ret) <- fetchRows hstmt (rowPFun colBuffer)
     case ret of
           SQL_SUCCESS           -> pure rows
@@ -601,7 +603,7 @@ execute con q = do
   
 data RowParser t =
   forall rowbuff.
-  RowParser { rowBuffer    :: HSTMT () -> IO rowbuff
+  RowParser { rowBuffer    :: BindType -> HSTMT () -> IO rowbuff
             , runRowParser :: rowbuff -> IO t
             }
 
@@ -611,15 +613,15 @@ instance Functor RowParser where
     pure (f res)
 
 instance Applicative RowParser where
-  pure a = RowParser (pure . const ()) (const (pure a))
+  pure a = RowParser (\_ _ -> pure ()) (const (pure a))
   (RowParser b1 f) <*> (RowParser b2 a) =
-    RowParser (\hstmt -> (,) <$> b1 hstmt <*> b2 hstmt) $
+    RowParser (\bt hstmt -> (,) <$> b1 bt hstmt <*> b2 bt hstmt) $
     \(b1', b2') -> f b1' <*> a b2'
 
 field :: forall f. FromField f => RowParser f
 field = RowParser
-        (\s ->
-            sqlBindCol (restmt s :: HSTMT (ColBuffer (FieldBufferType f)))
+        (\bt s ->
+            bindColumn bt (restmt s :: HSTMT (FieldBufferType f))
         )
         fromField
 
@@ -659,14 +661,18 @@ instance FromField a => FromRow (Identity a) where
 
 type FieldParser t = ColBuffer (FieldBufferType t) -> IO t
 
-class ( SQLBindCol ((ColBuffer (FieldBufferType t)))
+class ( SQLBindCol (FieldBufferType t)
       ) => FromField t where
   type FieldBufferType t :: *
   fromField :: ColBuffer (FieldBufferType t) -> IO t
 
 instance FromField Int where
-  type FieldBufferType Int = CBindCol CBigInt
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
+  type FieldBufferType Int = CBigInt
+  fromField =
+    either (\v -> extractVal v >>= pure . fromIntegral)
+           (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
+    .
+    getColBuffer
   
 {-
 instance FromField Int8 where
@@ -675,16 +681,28 @@ instance FromField Int8 where
 -}
   
 instance FromField Int16 where
-  type FieldBufferType Int16 = CBindCol CSmallInt 
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
+  type FieldBufferType Int16 = CSmallInt
+  fromField =
+    either (\v -> extractVal v >>= pure . fromIntegral)
+           (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
+    .
+    getColBuffer
 
 instance FromField Int32 where
-  type FieldBufferType Int32 = CBindCol CLong
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
+  type FieldBufferType Int32 = CLong
+  fromField =
+    either (\v -> extractVal v >>= pure . fromIntegral)
+           (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
+    .
+    getColBuffer
 
 instance FromField Int64 where
-  type FieldBufferType Int64 = CBindCol CBigInt
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
+  type FieldBufferType Int64 = CBigInt
+  fromField =
+    either (\v -> extractVal v >>= pure . fromIntegral)
+           (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
+    .
+    getColBuffer
 
 {-
 instance FromField Word where
@@ -693,8 +711,12 @@ instance FromField Word where
 -}
 
 instance FromField Word8 where
-  type FieldBufferType Word8 = CBindCol CUTinyInt
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ fromIntegral v)
+  type FieldBufferType Word8 = CUTinyInt
+  fromField =  
+    either (\v -> extractVal v >>= pure . fromIntegral)
+           (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
+    .
+    getColBuffer
 
 {-
 instance FromField Word16 where
@@ -727,65 +749,137 @@ instance (KnownNat n) => FromField (Sized n ASCIIText) where
 -}
 
 instance FromField Double where
-  type FieldBufferType Double = CBindCol CDouble
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
+  type FieldBufferType Double = CDouble
+  fromField =
+    either (\v -> extractVal v >>= pure . coerce)
+           (\v -> boundWith v (\_ -> fmap coerce . peek))
+    .
+    getColBuffer
 
 instance FromField Float where
-  type FieldBufferType Float = CBindCol CFloat
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ coerce v)
+  type FieldBufferType Float = CFloat
+  fromField =
+    either (\v -> extractVal v >>= pure . coerce)
+           (\v -> boundWith v (\_ -> fmap coerce . peek))
+    .
+    getColBuffer
 
 instance FromField Bool where
-  type FieldBufferType Bool = CBindCol CBool
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ if v == 1 then True else False)
+  type FieldBufferType Bool = CBool
+  fromField =
+    either (\v -> extractVal v >>= pure . boolFn)
+           (\v -> boundWith v $ \_ a -> do
+               v' <- peek a
+               pure (boolFn v'))
+    .
+    getColBuffer
 
-newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
-                  deriving (Show, Eq, Generic)
+    where boolFn v = if v == 1 then True else False
 
 instance FromField ASCIIText where
-  type FieldBufferType ASCIIText = CGetDataUnbound CChar
+  type FieldBufferType ASCIIText = CChar
+  fromField v = case getColBuffer v of
+    Left v' -> case v' of
+      BindColBuffer charCountFP textFP -> do
+         charCount <- peekFP charCountFP
+         a <- withForeignPtr textFP $ \ccharP -> F.peekCStringLen (coerce ccharP, fromIntegral charCount)
+         putStrLn $ "charCount : " ++ show (a, charCount)
+         pure (ASCIIText (T.pack a))
+    Right v' -> getDataTxt v'
+
+    where getDataTxt v' = do
+            bsb <- unboundWith v' mempty $
+              \bufSize lenOrInd cwcharP acc -> do
+                putStrLn $ "Bufsize and lenOrInd: " ++ show (bufSize, lenOrInd)
+                let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
+                                   then Left () -- (bufSize `div` 2) - 2
+                                   else Right lenOrInd
+                a <- case actBufSize of
+                  Left _ -> F.peekCWString (coerce cwcharP)
+                  Right len -> F.peekCWStringLen (coerce cwcharP, fromIntegral len)
+                pure (acc <> T.pack a)
+            pure (ASCIIText bsb)
+{-  
   fromField = \v -> do
     bsb <- unboundWith (getColBuffer v) mempty $
       \_ bufSize ccharP acc -> do
         a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
         pure (acc <> BSB.byteString a)
     pure (ASCIIText . T.pack . BS8.unpack . LBS.toStrict $ BSB.toLazyByteString bsb)  
+-}
 
 instance FromField ByteString where
-  type FieldBufferType ByteString = CGetDataUnbound CBinary
-  fromField = fmap LBS.toStrict . fromField
+  type FieldBufferType ByteString = CBinary
+  fromField v = case getColBuffer v of
+    Left v' -> case v' of
+      (BindColBuffer byteCountFP bytesFP) -> do
+         byteCount <- peekFP byteCountFP
+         putStrLn $ "Bytecount: " ++ show byteCount
+         pure (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
+    Right v' -> getDataBs v'
 
+    where getDataBs val = do
+            bsb <- unboundWith val mempty $
+              \bufSize lenOrInd ccharP acc -> do
+                let actBufSize = case fromIntegral lenOrInd of
+                                   SQL_NO_TOTAL -> bufSize
+                                   i | i > fromIntegral bufSize -> bufSize
+                                   len -> fromIntegral len
+                a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
+                pure (acc <> BSB.byteString a)
+            pure (LBS.toStrict (BSB.toLazyByteString bsb))
+  
 instance FromField LBS.ByteString where
-  type FieldBufferType LBS.ByteString = CGetDataUnbound CBinary
-  fromField = \v -> do
-    bsb <- unboundWith (getColBuffer v) mempty $
-      \bufSize lenOrInd ccharP acc -> do
-        putStrLn $ "Len or ind: " ++ show lenOrInd
-        let actBufSize = case fromIntegral lenOrInd of
-                           SQL_NO_TOTAL -> bufSize
-                           i | i > fromIntegral bufSize -> bufSize
-                           len -> fromIntegral len
-        a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
-        pure (acc <> BSB.byteString a)
-    pure (BSB.toLazyByteString bsb)
+  type FieldBufferType LBS.ByteString = CBinary
+  fromField v = case getColBuffer v of
+    Left v' -> case v' of
+      (BindColBuffer byteCountFP bytesFP) -> do
+         byteCount <- peekFP byteCountFP
+         pure (LBS.fromStrict (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount)))
+    Right v' -> getDataBs v'
 
+    where getDataBs val = do
+            bsb <- unboundWith val mempty $
+              \bufSize lenOrInd ccharP acc -> do
+                let actBufSize = case fromIntegral lenOrInd of
+                                   SQL_NO_TOTAL -> bufSize
+                                   i | i > fromIntegral bufSize -> bufSize
+                                   len -> fromIntegral len
+                a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
+                pure (acc <> BSB.byteString a)
+            pure (BSB.toLazyByteString bsb)
+            
 instance FromField Image where
-  type FieldBufferType Image = CGetDataUnbound CBinary
+  type FieldBufferType Image = CBinary
   fromField = fmap Image . fromField
 
 instance FromField T.Text where
-  type FieldBufferType T.Text = CGetDataUnbound CWchar
-  fromField = \v -> do
-    bsb <- unboundWith (getColBuffer v) mempty $
-      \bufSize lenOrInd cwcharP acc -> do
-        putStrLn $ "Bufsize and lenOrInd: " ++ show (bufSize, lenOrInd)
-        let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
-                           then Left () -- (bufSize `div` 2) - 2
-                           else Right lenOrInd
-        a <- case actBufSize of
-          Left _ -> F.peekCWString (coerce cwcharP)
-          Right len -> F.peekCWStringLen (coerce cwcharP, fromIntegral len)
-        pure (acc <> T.pack a)
-    pure bsb
+  type FieldBufferType T.Text = CWchar
+  fromField v = case getColBuffer v of
+    Left v' -> case v' of
+      BindColBuffer charCountFP textFP -> do
+         charCount <- peekFP charCountFP
+         putStrLn $ "charCount : " ++ show charCount         
+         case charCount == 0 of
+           True -> pure ""
+           False -> do 
+             a <- withForeignPtr textFP $ \cwcharP -> F.peekCWString (coerce cwcharP) -- , fromIntegral charCount)
+             putStrLn $ "charCount : " ++ show a -- (a, charCount)
+             pure (T.pack a)
+    Right v' -> getDataTxt v'
+
+    where getDataTxt v' = do
+            bsb <- unboundWith v' mempty $
+              \bufSize lenOrInd cwcharP acc -> do
+                putStrLn $ "Bufsize and lenOrInd: " ++ show (bufSize, lenOrInd)
+                let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
+                                   then Left () -- (bufSize `div` 2) - 2
+                                   else Right lenOrInd
+                a <- case actBufSize of
+                  Left _ -> F.peekCWString (coerce cwcharP)
+                  Right len -> F.peekCWStringLen (coerce cwcharP, fromIntegral len)
+                pure (acc <> T.pack a)
+            pure bsb
 
 {-
 instance FromField Money where
@@ -804,46 +898,62 @@ instance FromField SmallMoney where
 -}
 
 instance FromField Day where
-  type FieldBufferType Day = CBindCol CDate
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getDate (coerce v))
+  type FieldBufferType Day = CDate
+  fromField = 
+    either (\v -> extractVal v >>= (pure . getDate . coerce))
+           (\v -> boundWith v (\_ -> fmap (getDate . coerce) . peek))
+    .
+    getColBuffer
 
 instance FromField TimeOfDay where
-  type FieldBufferType TimeOfDay = CBindCol CTimeOfDay
-  fromField = \i -> do
-    extractWith (getColBuffer i) $ \_ v -> do
-      v' <- peek (coerce v)
-      pure $ getTimeOfDay v'
-      
+  type FieldBufferType TimeOfDay = CTimeOfDay
+  fromField =
+    either (\v -> extractWith v $ \_ v' -> do
+               v'' <- peek (coerce v')
+               pure $ getTimeOfDay v''
+           )
+           (\v -> boundWith v (\_ -> fmap (getTimeOfDay . coerce) . peek))
+    .
+    getColBuffer
+
 instance FromField LocalTime where
-  type FieldBufferType LocalTime = CBindCol CLocalTime
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ getLocalTime (coerce v))
+  type FieldBufferType LocalTime = CLocalTime
+  fromField =
+    either (\v -> extractVal v >>= (pure . getLocalTime . coerce))
+           (\v -> boundWith v (\_ -> fmap (getLocalTime . coerce) . peek))
+    .
+    getColBuffer
 
 instance FromField ZonedTime where
-  type FieldBufferType ZonedTime = CBindCol CZonedTime
-  fromField = \i -> extractVal (getColBuffer i) >>= (\v -> pure $ Database.MSSQL.Internal.SQLTypes.getZonedTime (coerce v))
+  type FieldBufferType ZonedTime = CZonedTime
+  fromField =
+    either (\v -> extractVal v >>= (pure . Database.MSSQL.Internal.SQLTypes.getZonedTime . coerce))
+           (\v -> boundWith v (\_ -> fmap (Database.MSSQL.Internal.SQLTypes.getZonedTime . coerce) . peek))
+    .
+    getColBuffer
 
 instance FromField UTCTime where
   type FieldBufferType UTCTime = FieldBufferType ZonedTime
-  fromField = \v -> zonedTimeToUTC <$> fromField v
+  fromField = fmap zonedTimeToUTC . fromField
 
 instance FromField UUID where
-  type FieldBufferType UUID = CBindCol UUID
-  fromField = \i -> extractVal (castColBufferPtr (getColBuffer i))
+  type FieldBufferType UUID = UUID
+  fromField =
+    either (extractVal . castColBufferPtr)
+           (\v -> boundWith v (\_ -> fmap coerce . peek))
+    .
+    getColBuffer
 
 -- NOTE: There is no generic lengthOrIndicatorFP
 instance FromField a => FromField (Maybe a) where
   type FieldBufferType (Maybe a) = FieldBufferType a
-  fromField = \v -> do
-    case getColBuffer v of
-      BindColBuffer fptr _ -> do 
+  fromField v = case getColBuffer v of
+      Left (BindColBuffer fptr _) -> do 
         lengthOrIndicator <- peekFP fptr
         if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
           then pure Nothing
           else Just <$> (fromField v)
-      GetDataBoundBuffer _ ->
-          pure Nothing          
-      GetDataUnboundBuffer _ ->
-          pure Nothing
+      Right _ -> pure Nothing
           -- fromField (ColBuffer (getDataUnboundBuffer $ \a accf -> k (Just a) $ \len ptr a -> if fromIntegral len == SQL_NULL_DATA then pure Nothing else Just <$> accf len ptr a))
   
 instance FromField a => FromField (Identity a) where
@@ -851,13 +961,7 @@ instance FromField a => FromField (Identity a) where
   fromField = \v ->
       Identity <$> (fromField v)
 
--- TODO: Is coerceColBuffer necessary? is it same as castColBufferPtr?
--- coerceColBuffer :: (Coercible a b) => ColBuffer a -> ColBuffer b
--- coerceColBuffer c = c {getColBuffer  = castForeignPtr $ getColBuffer c}
-
-type SQLBindColM t = ReaderT ColPos IO (Either SQLErrors t)
-
-inQuotes :: Builder -> Builder
+inQuotes :: BSB.Builder -> BSB.Builder
 inQuotes b = quote `mappend` b `mappend` quote
   where quote = BSB.char8 '\''  
 
@@ -866,6 +970,7 @@ newtype CBool = CBool Word8
   deriving (Num, Eq, Storable)
 #endif
 
+{-
 (<$$>) :: (Functor f, Functor g) => (a -> b) -> f (g a) -> f (g b)
 (<$$>) f = getCompose . fmap f . Compose
 
@@ -873,6 +978,7 @@ newtype CBool = CBool Word8
          , Applicative g
          ) => f (g (a -> b)) -> f (g a) -> f (g b)
 (<**>) f = getCompose . liftA2 id (Compose f) . Compose
+-}
 
 newtype Money = Money { getMoney :: Scientific }
               deriving (Eq)

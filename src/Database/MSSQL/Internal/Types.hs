@@ -206,10 +206,6 @@ data ConnectAttr (at :: ConnectAttrAt)
 newtype AttrName = AttrName { getAttrName :: CLong }
              deriving (Show, Eq, Storable, Integral, Real, Enum, Num, Ord)
             
-newtype ColBuffer t = ColBuffer
-  { getColBuffer :: ColBufferType (GetColBufferType t) t
-  } 
-
 data ColBufferTypeK =
     BindCol
   | GetDataBound
@@ -220,20 +216,13 @@ data ColBufferType (k :: ColBufferTypeK) t where
   GetDataBoundBuffer :: IO (ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataBound t
   GetDataUnboundBuffer :: (forall a. a -> (CLong -> CLong -> Ptr t -> a -> IO a) -> IO a) -> ColBufferType 'GetDataUnbound t
 
-type family GetColBufferType t where
-  GetColBufferType (CGetDataUnbound _) = 'GetDataUnbound
-  GetColBufferType (CGetDataBound _)   = 'GetDataBound
-  GetColBufferType (CBindCol _)        = 'BindCol
+data ColBufferSizeK =
+    Unbounded
+  | Bounded
 
-newtype CBindCol a = CBindCol { getCBindCol :: a }
-                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
-
-newtype CGetDataBound a = CGetDataBound { getCGetDataBound :: a }
-                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
-
-newtype CGetDataUnbound a = CGetDataUnbound { getCGetDataUnbound :: a }
-                   deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
-
+type family GetColBufferTypeFromSize (tySz :: ColBufferSizeK) :: ColBufferTypeK where
+  GetColBufferTypeFromSize 'Unbounded = 'GetDataUnbound
+  GetColBufferTypeFromSize 'Bounded   = 'GetDataBound  
 
 data ColDescriptor = ColDescriptor
   { colName         :: T.Text
