@@ -44,6 +44,7 @@ import qualified Data.String as S
 import Numeric
 import Control.Exception
 import Utils
+import Data.Char
 
 data TestT1 = TestT1
   { test_id :: Int32
@@ -101,8 +102,8 @@ data DT_Overflow = DT_Overflow { dto1 :: Int, dto2 :: Double }
 instance FromRow DT_Overflow where
   -- fromRow = DT_Overflow <*> field <*> field
 
-unit_transaction_test :: IO ()
-unit_transaction_test = do
+_unit_transaction_test :: IO ()
+_unit_transaction_test = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   execute con "delete from test"  
@@ -113,8 +114,8 @@ unit_transaction_test = do
   pure (pure 1) @=? vs  
   pure ()
 
-unit_transaction_prim_test :: IO ()
-unit_transaction_prim_test = do
+_unit_transaction_prim_test :: IO ()
+_unit_transaction_prim_test = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   execute con "delete from test"
@@ -170,6 +171,18 @@ _unit_double = do
   disconnect con
   pure ()
 
+_unit_bytestring :: IO ()
+_unit_bytestring = do
+  let conInfo = testConnectInfo
+  con <- connect conInfo
+  print "bytestring test"
+  let t = "0x7f5145d98ffffffffffff"
+  res <- query con ("select CAST(" <> t <> " AS VARBINARY)") :: IO (Vector (Identity ByteString))
+  pure (pure t) @=? ((fmap . fmap) (\v -> "0x" <> T.pack (B.foldr showHex "" v)) res)
+  disconnect con
+  pure ()
+
+
 _unit_ascii :: IO ()
 _unit_ascii = do
   let conInfo = testConnectInfo
@@ -180,15 +193,17 @@ _unit_ascii = do
   disconnect con
   pure ()
 
-_unit_text :: IO ()
-_unit_text = do
+unit_text :: IO ()
+unit_text = do
   let conInfo = testConnectInfo
   con <- connect conInfo
-  let t1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  let t1 = ""
   print "bbbbb test"
-  res <- query con "select CAST (N'\65536\65536\65536\65536\65536\65536\65536\65536\65536' AS NTEXT)" :: IO (Vector (Identity Text))
-  print "\65536\65536\65536\65536\65536\65536\65536\65536\65536"
-  print res
+  res <- query con "select CAST (N'A' AS NTEXT)" :: IO (Vector (Identity Text))
+  res @=? pure (pure "A")
+  res1 <- query con "select CAST (N'彽' AS NTEXT)" :: IO (Vector (Identity Text))
+  res1 @=? pure (pure "彽")
+  
   disconnect con
   pure ()
 
@@ -228,12 +243,12 @@ _unit_sqlinsert = do
   res <- execute con "insert test1 (test_id, col1, col2, col3, col4, smallint, bit, tinyint, bigint, dbl, flt, datec, tod, dt, dt2, sdt, dtz, utc1, uuid, ntxt, char10, nchar10) VALUES (5, '12/13/2012', 3, 'fdfd', 'fdffddf', 32, 1, 23,99999999,4, 6.5,'1/13/2013', '00:00:00', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123', '2015-03-19 05:15:18.123+05:30', '2015-03-19 05:15:18.123+05:30', '0E984725-C51C-4BF4-9960-E1C80E27ABA0', N'🌀', 'dfd', N'🌀');"
   print res
 
-_test_roundTrip :: TestTree
-_test_roundTrip =
+test_roundTrip :: TestTree
+test_roundTrip =
   withResource (connect testConnectInfo)
                disconnect $ \r -> 
   testGroup "round trip tests"
-  [ testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
+  [ {-testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ minBound @Int)
   
   -- , testProperty "maxBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ maxBound @Int8)
@@ -279,9 +294,9 @@ _test_roundTrip =
   , testProperty "@Double" $ withTests 100 $ roundTrip r (Gen.double $ Range.exponentialFloat (-100) 100) -- OK
   , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
-  -- , testProperty "@ASCIIText" $ withTests 10 $ roundTripWith r (asciiText (Range.constant 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")  
-  -- , testProperty "@Bytestring" $ withTests 10 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-  -- , testProperty "@Text" $ withTests 1000 $ roundTripWith r (Gen.text (Range.linear 1 1000) Gen.unicode) (\t -> "'" <> T.replace "'" "''" t <> "'")
+  , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r (asciiText (Range.linear 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")
+  , testProperty "@Bytestring" $ withTests 1 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
+   ,-} testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'' && ord x < 65536) Gen.unicode)) (\t -> "'" <> t <> "'") {-
   -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
   -- , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")
   {-
@@ -289,12 +304,12 @@ _test_roundTrip =
       v <- evalIO $ runSession testConnectInfo $
         query_ "select CAST ( -100.0 AS FLOAT(53))"
       v === Right (V.fromList [Identity (-100.0 :: Double)])
-  -}
+  -}-}
   ]
 
   where toMoney i64 = Money (read (show i64) / 10000)
         toSmallMoney i32 = SmallMoney (read (show i32) / 10000)
-        -- byteGen = Gen.filter (\x -> BS.elem 0x0 x) (Gen.bytes (Range.linear 1 100000))
+        -- byteGen = Gen.filter (\x -> BS.elem 0 x) (Gen.bytes (Range.singleton 5))
         doubleNull = BS.pack [0x0, 0x0]
         ppMaybe a = case a of
                       Nothing -> "null"

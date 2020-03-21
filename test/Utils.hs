@@ -20,6 +20,7 @@ import Data.Typeable
 import qualified Data.HashMap.Strict as HM
 import qualified Data.String as S
 import Control.Monad.IO.Class
+import qualified Data.Text.IO as T
 
 ppTz :: TimeZone -> String
 ppTz (TimeZone tzms _ _) =
@@ -36,7 +37,7 @@ ppTz (TimeZone tzms _ _) =
         
 asciiText :: MonadGen m => Range Int -> m ASCIIText
 asciiText r =
-  (ASCIIText . T.pack) <$> Gen.list r Gen.alphaNum
+  (ASCIIText . T.pack) <$> Gen.list r (Gen.enum '\40' '\127')
 
 day :: ( MonadGen m
       , GenBase m ~ Identity
@@ -99,9 +100,10 @@ roundTripWith :: forall a.
   , Typeable a
   , Show a
   ) => IO Connection -> Gen a -> (a -> Text) -> Property
-roundTripWith con gen f =
+roundTripWith con gen f =  
   property $ do
     val <- forAll gen
+    evalIO $ T.putStrLn $ "<Value :: > " <> (f val)
     trippingM val (mkQuery f) (evalQuery con)
     pure ()
 
@@ -113,10 +115,13 @@ mkQuery f a =
       (sqlType, isQuoted) = getSQLType a
   in eval $ S.fromString (T.unpack ("select CAST (" <> fmtedVal <> " AS " <> sqlType <> ")"))
 
-evalQuery con q =
-  liftIO . fmap wrapCompose $ do
+evalQuery con q = do
+  evalIO . fmap wrapCompose $ do
       con' <- con
-      query con' q
+      res <- query con' q
+      putStrLn $ "Done: " <> show res
+      return res
+      
 
 wrapCompose :: forall a b.
               Vector (Identity b) ->
