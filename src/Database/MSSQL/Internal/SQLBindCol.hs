@@ -165,7 +165,6 @@ instance SQLBindCol CBinary where
       let
         cpos = colPosition cdesc
         bufSize = fromIntegral (colSize cdesc)
-      putStrLn $ "BufSize: " <> show bufSize
       binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
@@ -205,7 +204,6 @@ instance SQLBindCol CBinary where
                      case isSuccessful ret of
                        True -> do
                            lengthOrInd <- peekFP lenOrIndFP
-                           putStrLn $ "status: " ++ show (ret, lengthOrInd)
                            acc' <- withForeignPtr binFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
                            go acc'
                        False -> pure acc
@@ -274,7 +272,7 @@ instance SQLBindCol CWchar where
   sqlBindCol hstmt =
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let cpos = colPosition cdesc
-          bufSize = fromIntegral (1000 :: Integer) -- (colSize cdesc * 4 + 1)
+          bufSize = fromIntegral (10000 :: Integer) -- (colSize cdesc * 4 + 1)
       print $ "colSize as said: " ++ show (colSize cdesc, bufSize)          
       txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -288,7 +286,7 @@ instance SQLBindCol CWchar where
           return ret;
         }|]
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
-        (bindColBuffer lenOrIndFP $ coerce txtFP)
+        (bindColBuffer lenOrIndFP txtFP)
 
   sqlGetData hstmt = 
    sqlBindColTplUnbound hstmt block
@@ -317,7 +315,6 @@ instance SQLBindCol CWchar where
                      case isSuccessful ret of
                        True -> do
                            msgs <- getMessages (SQLSTMTRef hstmtP)
-                           putStrLn $ "Message: " ++ show (msgs, ret, ret == SQL_SUCCESS)
                            lengthOrInd <- peekFP lenOrIndFP
                            {-
                            let actBufSize = case fromIntegral lengthOrInd of

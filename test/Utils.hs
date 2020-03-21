@@ -118,6 +118,7 @@ mkQuery f a =
 evalQuery con q = do
   evalIO . fmap wrapCompose $ do
       con' <- con
+      T.putStrLn $ "Query is: " <> q
       res <- query con' q
       putStrLn $ "Done: " <> show res
       return res
@@ -160,8 +161,8 @@ getSQLType a = case show $ typeOf a of
   "Money"    -> ("MONEY", True)
   "SmallMoney" -> ("SMALLMONEY", True)  
   "ASCIIText" -> ("VARCHAR(5000)", False)
-  "Text" -> ("TEXT", False)
-  "SQLBound Text" -> ("TEXT", False)  
+  "Text" -> ("NTEXT", False)
+  "SQLBound Text" -> ("NTEXT", False)  
   "ByteString" -> ("VARBINARY(8000)", False)
   "SQLBound ByteString" -> ("VARBINARY(8000)", False)  
   "Maybe Double" -> ("FLOAT(53)", False)

@@ -78,6 +78,8 @@ import Control.Exception (bracket, onException, finally)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
 import qualified Data.ByteString.Internal as B
+-- import Foreign.Marshal.Array
+import qualified Data.Text.Encoding as TE
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
@@ -783,14 +785,12 @@ instance FromField ASCIIText where
       BindColBuffer charCountFP textFP -> do
          charCount <- peekFP charCountFP
          a <- withForeignPtr textFP $ \ccharP -> F.peekCStringLen (coerce ccharP, fromIntegral charCount)
-         putStrLn $ "charCount : " ++ show (a, charCount)
          pure (ASCIIText (T.pack a))
     Right v' -> getDataTxt v'
 
     where getDataTxt v' = do
             bsb <- unboundWith v' mempty $
               \bufSize lenOrInd cwcharP acc -> do
-                putStrLn $ "Bufsize and lenOrInd: " ++ show (bufSize, lenOrInd)
                 let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
                                    then Left () -- (bufSize `div` 2) - 2
                                    else Right lenOrInd
@@ -814,7 +814,6 @@ instance FromField ByteString where
     Left v' -> case v' of
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
-         putStrLn $ "Bytecount: " ++ show byteCount
          pure (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
     Right v' -> getDataBs v'
 
@@ -854,17 +853,22 @@ instance FromField Image where
   fromField = fmap Image . fromField
 
 instance FromField T.Text where
-  type FieldBufferType T.Text = CWchar
+  type FieldBufferType T.Text = CBinary
+  fromField = fmap TE.decodeUtf16LE . fromField
+
+{-  
   fromField v = case getColBuffer v of
     Left v' -> case v' of
       BindColBuffer charCountFP textFP -> do
          charCount <- peekFP charCountFP
+         xs <- withForeignPtr textFP $ \cp -> peekArray (fromIntegral charCount) cp
+         putStrLn $ "XS: " ++ show xs
          putStrLn $ "charCount : " ++ show charCount         
          case charCount == 0 of
            True -> pure ""
            False -> do 
-             a <- withForeignPtr textFP $ \cwcharP -> F.peekCWString (coerce cwcharP) -- , fromIntegral charCount)
-             putStrLn $ "charCount : " ++ show a -- (a, charCount)
+             a <- withForeignPtr textFP $ \cwcharP -> F.peekCWStringLen (cwcharP, fromIntegral charCount)
+             putStrLn $ "char : " ++ show a -- (a, charCount)
              pure (T.pack a)
     Right v' -> getDataTxt v'
 
@@ -880,7 +884,7 @@ instance FromField T.Text where
                   Right len -> F.peekCWStringLen (coerce cwcharP, fromIntegral len)
                 pure (acc <> T.pack a)
             pure bsb
-
+-}
 {-
 instance FromField Money where
   type FieldBufferType Money = CBindCol (CDecimal CChar)

@@ -199,10 +199,12 @@ unit_text = do
   con <- connect conInfo
   let t1 = ""
   print "bbbbb test"
-  res <- query con "select CAST (N'A' AS NTEXT)" :: IO (Vector (Identity Text))
-  res @=? pure (pure "A")
-  res1 <- query con "select CAST (N'彽' AS NTEXT)" :: IO (Vector (Identity Text))
-  res1 @=? pure (pure "彽")
+  res <- query con "select CAST (N'AB' AS NTEXT)" :: IO (Vector (Identity Text))
+  res @=? pure (pure "AB")
+  res <- query con "select CAST (N'ASDFDASGASD54234asdas;;@' AS NTEXT)" :: IO (Vector (Identity Text))
+  res @=? pure (pure "ASDFDASGASD54234asdas;;@")  
+  res1 <- query con "select CAST (N'岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍' AS NTEXT)" :: IO (Vector (Identity Text))
+  res1 @=? pure (pure "岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍")
   
   disconnect con
   pure ()
@@ -296,7 +298,7 @@ test_roundTrip =
   
   , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r (asciiText (Range.linear 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")
   , testProperty "@Bytestring" $ withTests 1 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-   ,-} testProperty "@Text" $ withTests 10 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'' && ord x < 65536) Gen.unicode)) (\t -> "'" <> t <> "'") {-
+  ,-} testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'") {-
   -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
   -- , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")
   {-
