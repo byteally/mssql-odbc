@@ -77,7 +77,7 @@ import Control.Exception (bracket, onException, finally)
 -- import Foreign.Marshal.Utils (fillBytes)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
-import qualified Data.ByteString.Internal as B
+-- import qualified Data.ByteString.Internal as B
 -- import Foreign.Marshal.Array
 import qualified Data.Text.Encoding as TE
 
@@ -790,7 +790,7 @@ instance FromField ASCIIText where
 
     where getDataTxt v' = do
             bsb <- unboundWith v' mempty $
-              \bufSize lenOrInd cwcharP acc -> do
+              \_bufSize lenOrInd cwcharP acc -> do
                 let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
                                    then Left () -- (bufSize `div` 2) - 2
                                    else Right lenOrInd
@@ -814,7 +814,9 @@ instance FromField ByteString where
     Left v' -> case v' of
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
-         pure (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
+         withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
+         
+         -- pure (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
     Right v' -> getDataBs v'
 
     where getDataBs val = do
@@ -834,7 +836,8 @@ instance FromField LBS.ByteString where
     Left v' -> case v' of
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
-         pure (LBS.fromStrict (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount)))
+         withForeignPtr bytesFP $ \bytesP -> (LBS.fromStrict <$> (BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
+         -- pure (LBS.fromStrict (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount)))
     Right v' -> getDataBs v'
 
     where getDataBs val = do
@@ -853,9 +856,26 @@ instance FromField Image where
   fromField = fmap Image . fromField
 
 instance FromField T.Text where
-  type FieldBufferType T.Text = CBinary
-  fromField = fmap TE.decodeUtf16LE . fromField
+  type FieldBufferType T.Text = CText
+  fromField v = fmap TE.decodeUtf16LE $ case getColBuffer v of
+    Left v' -> case v' of
+      (BindColBuffer byteCountFP bytesFP) -> do
+         byteCount <- peekFP byteCountFP
+         withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
+         
+    Right v' -> getDataBs v'
 
+    where getDataBs val = do
+            bsb <- unboundWith val mempty $
+              \bufSize lenOrInd ccharP acc -> do
+                let actBufSize = case fromIntegral lenOrInd of
+                                   SQL_NO_TOTAL -> bufSize
+                                   i | i > fromIntegral bufSize -> bufSize
+                                   len -> fromIntegral len
+                a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
+                pure (acc <> BSB.byteString a)
+            pure (LBS.toStrict (BSB.toLazyByteString bsb))
+  
 {-  
   fromField v = case getColBuffer v of
     Left v' -> case v' of

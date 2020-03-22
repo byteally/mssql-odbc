@@ -160,11 +160,65 @@ newtype CBinary = CBinary { getCBinary :: CUChar }
 instance SQLBindCol CBinary where
   type ColBufferSize CBinary = 'Unbounded
   
-  sqlBindCol hstmt =
+  sqlBindCol hstmt = do
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
         bufSize = fromIntegral (colSize cdesc)
+      binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+      ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
+        [C.block| int {
+          SQLRETURN ret = 0;
+          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQLCHAR* binP), $(SQLLEN bufSize), lenOrInd);
+          return ret;
+        }|]
+      returnWithRetCode ret (SQLSTMTRef hstmtP) $
+        bindColBuffer lenOrIndFP (coerce binFP)
+
+  sqlGetData hstmt = 
+   sqlBindColTplUnbound hstmt block
+   
+     where block hstmtP cdesc = do
+             let bufSize = fromIntegral (32 :: Int)
+             binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
+             let cpos = colPosition cdesc
+                 cbuf = getDataUnboundBuffer (\acc f ->
+                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)
+                        
+             pure cbuf
+
+           fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f = go           
+             where go acc = do
+                     ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
+                      [C.block| int {
+                        SQLRETURN ret = 0;
+                        SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
+                        SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
+                        ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQLCHAR* binP), $(SQLLEN bufSize), lenOrInd);
+                        return ret;
+                      }|]
+                     case isSuccessful ret of
+                       True -> do
+                           lengthOrInd <- peekFP lenOrIndFP
+                           acc' <- withForeignPtr binFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
+                           go acc'
+                       False -> pure acc
+
+newtype CText = CText { getCText :: CBinary }
+                deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+
+instance SQLBindCol CText where
+  type ColBufferSize CText = 'Unbounded
+  
+  sqlBindCol hstmt = do
+    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
+      let
+        cpos = colPosition cdesc
+        bufSize = fromIntegral (colSize cdesc * 4 + 2)
       binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
@@ -314,7 +368,7 @@ instance SQLBindCol CWchar where
                       }|]
                      case isSuccessful ret of
                        True -> do
-                           msgs <- getMessages (SQLSTMTRef hstmtP)
+                           -- msgs <- getMessages (SQLSTMTRef hstmtP)
                            lengthOrInd <- peekFP lenOrIndFP
                            {-
                            let actBufSize = case fromIntegral lengthOrInd of
@@ -915,7 +969,8 @@ sqlMapping =
   [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
   , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
   , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
-  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY, SQL_WLONGVARCHAR, SQL_VARCHAR, SQL_WVARCHAR, SQL_LONGVARCHAR])  
+  , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY])
+  , (typeOf (undefined :: CText)   , [SQL_WLONGVARCHAR, SQL_VARCHAR, SQL_WVARCHAR, SQL_LONGVARCHAR])    
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
   , (typeOf (undefined :: CLong)     , [SQL_INTEGER])

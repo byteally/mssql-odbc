@@ -102,8 +102,8 @@ data DT_Overflow = DT_Overflow { dto1 :: Int, dto2 :: Double }
 instance FromRow DT_Overflow where
   -- fromRow = DT_Overflow <*> field <*> field
 
-_unit_transaction_test :: IO ()
-_unit_transaction_test = do
+unit_transaction_test :: IO ()
+unit_transaction_test = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   execute con "delete from test"  
@@ -114,8 +114,8 @@ _unit_transaction_test = do
   pure (pure 1) @=? vs  
   pure ()
 
-_unit_transaction_prim_test :: IO ()
-_unit_transaction_prim_test = do
+unit_transaction_prim_test :: IO ()
+unit_transaction_prim_test = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   execute con "delete from test"
@@ -183,8 +183,8 @@ _unit_bytestring = do
   pure ()
 
 
-_unit_ascii :: IO ()
-_unit_ascii = do
+unit_ascii :: IO ()
+unit_ascii = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   print "ascii test"
@@ -205,7 +205,18 @@ unit_text = do
   res @=? pure (pure "ASDFDASGASD54234asdas;;@")  
   res1 <- query con "select CAST (N'岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍' AS NTEXT)" :: IO (Vector (Identity Text))
   res1 @=? pure (pure "岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍")
+  res1 <- query con "select CAST (N'large world of text which is like really huge' AS NVARCHAR(50))" :: IO (Vector (Identity Text))
+  res1 @=? pure (pure "large world of text which is like really huge")
   
+  disconnect con
+  pure ()
+
+unit_regression_text :: IO ()
+unit_regression_text = do
+  let conInfo = testConnectInfo
+  con <- connect conInfo
+  let t = "large world of text which is like really huge"
+  res <- query con "select [Zone] from Chinook.dbo.[MichelinCustomerProfile] order by [CUSTOMER_NUMBER]" :: IO (Vector (Identity Text))
   disconnect con
   pure ()
 
@@ -250,7 +261,7 @@ test_roundTrip =
   withResource (connect testConnectInfo)
                disconnect $ \r -> 
   testGroup "round trip tests"
-  [ {-testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
+  [ testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ minBound @Int)
   
   -- , testProperty "maxBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ maxBound @Int8)
@@ -297,8 +308,8 @@ test_roundTrip =
   , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
   , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r (asciiText (Range.linear 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")
-  , testProperty "@Bytestring" $ withTests 1 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
-  ,-} testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'") {-
+  -- , testProperty "@Bytestring" $ withTests 1 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
+  , testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'")
   -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
   -- , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")
   {-
@@ -306,7 +317,7 @@ test_roundTrip =
       v <- evalIO $ runSession testConnectInfo $
         query_ "select CAST ( -100.0 AS FLOAT(53))"
       v === Right (V.fromList [Identity (-100.0 :: Double)])
-  -}-}
+  -}
   ]
 
   where toMoney i64 = Money (read (show i64) / 10000)
