@@ -202,7 +202,7 @@ instance SQLBindCol CBinary where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (65536 :: Int)
+             let bufSize = fromIntegral _64Kb
              binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
@@ -254,7 +254,7 @@ instance SQLBindCol CText where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (65536 :: Int)
+             let bufSize = fromIntegral _64Kb
              binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
@@ -305,7 +305,7 @@ instance SQLBindCol CChar where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (65536 :: Int)
+             let bufSize = fromIntegral _64Kb
              chrFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
@@ -1074,3 +1074,6 @@ sqlDescribeCol hstmt colPos' = do
 
 guardedMallocForeignPtrBytes :: Int -> IO (ForeignPtr a)
 guardedMallocForeignPtrBytes = mallocForeignPtrBytes
+
+_64Kb :: Word
+_64Kb = 65536

@@ -935,11 +935,12 @@ bindColumnStrategy hstmt =
         accFn desc acc =
           case desc of
              d | colDataType d `elem` unboundedTypes -> SQLGetData
+               | colSize d > _64Kb  -> SQLGetData
                | otherwise -> acc
 
           where unboundedTypes = [ SQL_WLONGVARCHAR, SQL_LONGVARCHAR, SQL_LONGVARBINARY ]
 
-  
+
 
 {-
 

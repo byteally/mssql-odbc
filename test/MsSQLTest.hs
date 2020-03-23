@@ -215,12 +215,12 @@ unit_text = do
   disconnect con
   pure ()
 
-_unit_regression_text :: IO ()
-_unit_regression_text = do
+unit_regression_text :: IO ()
+unit_regression_text = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   let t = "large world of text which is like really huge"
-  res <- query con "select [Zone] from Chinook.dbo.[MichelinCustomerProfile] order by [CUSTOMER_NUMBER]" :: IO (Vector (Identity Text))
+  res <- query con "select * from Chinook.dbo.[MichelinCustomerProfile] order by [CUSTOMER_NUMBER]" :: IO (Vector (Identity Text))
   disconnect con
   pure ()
 
