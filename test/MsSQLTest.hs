@@ -188,8 +188,8 @@ unit_ascii = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   print "ascii test"
-  res <- query con "select CAST ('LPN' AS VARCHAR), CAST ('LPN' AS VARCHAR)" :: IO (Vector ((ASCIIText, ASCIIText)))
-  print res
+  res <- query con "select CAST ('((((((((((((((((((((' AS VARCHAR(5000))" :: IO (Vector (Identity ASCIIText))
+  pure (pure "((((((((((((((((((((") @=? res
   disconnect con
   pure ()
 
@@ -308,7 +308,7 @@ test_roundTrip =
   , testProperty "@Maybe Double" $ withTests 100 $ roundTripWith r (Gen.maybe $ Gen.double $ Range.exponentialFloat (-100) 100) ppMaybe -- OK
   
   , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r (asciiText (Range.linear 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")
-  -- , testProperty "@Bytestring" $ withTests 1 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
+  -- , testProperty "@Bytestring" $ withTests 100 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
   , testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'")
   -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
   -- , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")

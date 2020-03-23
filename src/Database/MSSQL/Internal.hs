@@ -790,23 +790,10 @@ instance FromField ASCIIText where
 
     where getDataTxt v' = do
             bsb <- unboundWith v' mempty $
-              \_bufSize lenOrInd cwcharP acc -> do
-                let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
-                                   then Left () -- (bufSize `div` 2) - 2
-                                   else Right lenOrInd
-                a <- case actBufSize of
-                  Left _ -> F.peekCWString (coerce cwcharP)
-                  Right len -> F.peekCWStringLen (coerce cwcharP, fromIntegral len)
+              \_bufSize _lenOrInd ccharP acc -> do
+                a <- F.peekCString ccharP
                 pure (acc <> T.pack a)
             pure (ASCIIText bsb)
-{-  
-  fromField = \v -> do
-    bsb <- unboundWith (getColBuffer v) mempty $
-      \_ bufSize ccharP acc -> do
-        a <- BS.packCStringLen (coerce ccharP, fromIntegral bufSize)
-        pure (acc <> BSB.byteString a)
-    pure (ASCIIText . T.pack . BS8.unpack . LBS.toStrict $ BSB.toLazyByteString bsb)  
--}
 
 instance FromField ByteString where
   type FieldBufferType ByteString = CBinary
@@ -816,7 +803,6 @@ instance FromField ByteString where
          byteCount <- peekFP byteCountFP
          withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
          
-         -- pure (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount))
     Right v' -> getDataBs v'
 
     where getDataBs val = do

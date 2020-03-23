@@ -103,7 +103,7 @@ roundTripWith :: forall a.
 roundTripWith con gen f =  
   property $ do
     val <- forAll gen
-    evalIO $ T.putStrLn $ "<Value :: > " <> (f val)
+    -- evalIO $ T.putStrLn $ "<Value :: > " <> (f val)
     trippingM val (mkQuery f) (evalQuery con)
     pure ()
 
@@ -118,9 +118,9 @@ mkQuery f a =
 evalQuery con q = do
   evalIO . fmap wrapCompose $ do
       con' <- con
-      T.putStrLn $ "Query is: " <> q
+      -- T.putStrLn $ "Query is: " <> q
       res <- query con' q
-      putStrLn $ "Done: " <> show res
+      -- putStrLn $ "Done: " <> show res
       return res
       
 
@@ -163,7 +163,7 @@ getSQLType a = case show $ typeOf a of
   "ASCIIText" -> ("VARCHAR(5000)", False)
   "Text" -> ("NTEXT", False)
   "SQLBound Text" -> ("NTEXT", False)  
-  "ByteString" -> ("VARBINARY(8000)", False)
+  "ByteString" -> ("VARBINARY(500)", False)
   "SQLBound ByteString" -> ("VARBINARY(8000)", False)  
   "Maybe Double" -> ("FLOAT(53)", False)
   "ZonedTime" -> ("datetimeoffset", True)

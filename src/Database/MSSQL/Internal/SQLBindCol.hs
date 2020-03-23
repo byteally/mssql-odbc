@@ -311,12 +311,6 @@ instance SQLBindCol CChar where
                      case isSuccessful ret of
                        True -> do
                            lengthOrInd <- peekFP lenOrIndFP
-                           {-
-                           let actBufSize = case fromIntegral lengthOrInd of
-                                              SQL_NO_TOTAL                 -> bufSize - 1
-                                              i | i >= fromIntegral bufSize -> bufSize - 1
-                                              _                            -> lengthOrInd
-                           -}
                            acc' <- withForeignPtr chrFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
                            go acc'
                        False -> pure acc
