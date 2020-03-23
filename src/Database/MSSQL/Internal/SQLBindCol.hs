@@ -161,24 +161,23 @@ newtype CSized (n :: Nat) a = CSized { getCSized :: a }
 newtype CBinary = CBinary { getCBinary :: CUChar }
                 deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
-instance (SQLBindCol a, KnownNat n) => SQLBindCol (CSized n a) where
+instance (KnownNat n, SQLBindCol a) => SQLBindCol (CSized n a) where
   type ColBufferSize (CSized n a) = ColBufferSize a
   sqlBindCol hstmt = do
     cdesc <- getCurrentColDescriptor hstmt
     let cSize = fromIntegral (colSize cdesc)
         tSize = fromIntegral (natVal (Proxy :: Proxy n))
-    -- putStrLn $ "CSized : " ++ show (cSize, tSize)
-    case cSize > tSize of
-      True -> throwIO (SQLColumnSizeException tSize cSize)
-      False -> coerce <$> sqlBindCol (restmt hstmt :: HSTMT a)
+    case cSize == tSize of
+      False -> throwIO (SQLColumnSizeException tSize cSize)
+      True -> coerce <$> sqlBindCol (restmt hstmt :: HSTMT a)
   sqlGetData hstmt = do
     cdesc <- getCurrentColDescriptor hstmt
     let cSize = fromIntegral (colSize cdesc)
         tSize = fromIntegral (natVal (Proxy :: Proxy n))
-    case cSize > tSize of
-      True -> throwIO (SQLColumnSizeException tSize cSize)
-      False -> coerce <$> sqlGetData (restmt hstmt :: HSTMT a)
-      
+    case cSize == tSize of
+      False -> throwIO (SQLColumnSizeException tSize cSize)
+      True -> coerce <$> sqlGetData (restmt hstmt :: HSTMT a)
+
 instance SQLBindCol CBinary where
   type ColBufferSize CBinary = 'Unbounded  
   sqlBindCol hstmt = do
@@ -186,7 +185,7 @@ instance SQLBindCol CBinary where
       let
         cpos = colPosition cdesc
         bufSize = fromIntegral (colSize cdesc)
-      binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+      binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
         [C.block| int {
@@ -203,13 +202,12 @@ instance SQLBindCol CBinary where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (32 :: Int)
-             binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+             let bufSize = fromIntegral (65536 :: Int)
+             binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)
-                        
+                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)                        
              pure cbuf
 
            fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f = go           
@@ -238,8 +236,8 @@ instance SQLBindCol CText where
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufSize = fromIntegral ((colSize cdesc * 4) + 2)
-      binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+        bufSize = fromIntegral (colSize cdesc * 4 + 2)
+      binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
         [C.block| int {
@@ -256,8 +254,8 @@ instance SQLBindCol CText where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (32 :: Int)
-             binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+             let bufSize = fromIntegral (65536 :: Int)
+             binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = getDataUnboundBuffer (\acc f ->
@@ -289,8 +287,7 @@ instance SQLBindCol CChar where
       let
         cpos = colPosition cdesc
         bufSize = fromIntegral (colSize cdesc + 1)
-      -- print $ "colSize as said: " ++ show (colSize cdesc)
-      chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+      chrFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrp -> do
         [C.block| int {
@@ -308,8 +305,8 @@ instance SQLBindCol CChar where
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral (20 :: Int)
-             chrFP <- mallocForeignPtrBytes (fromIntegral bufSize)
+             let bufSize = fromIntegral (65536 :: Int)
+             chrFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = getDataUnboundBuffer (\acc f ->
@@ -335,65 +332,6 @@ instance SQLBindCol CChar where
                            go acc'
                        False -> pure acc
 
-instance SQLBindCol CWchar where
-  type ColBufferSize CWchar = 'Unbounded  
-  sqlBindCol hstmt =
-    sqlBindColTpl hstmt $ \hstmtP cdesc -> do
-      let cpos = colPosition cdesc
-          bufSize = fromIntegral (10000 :: Integer) -- (colSize cdesc * 4 + 1)
-      print $ "colSize as said: " ++ show (colSize cdesc, bufSize)          
-      txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
-      lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
-      
-      ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
-        [C.block| int {
-          SQLRETURN ret = 0;
-          SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
-          SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-          ret = SQLBindCol(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), $(SQLLEN bufSize), lenOrInd);
-          return ret;
-        }|]
-      returnWithRetCode ret (SQLSTMTRef hstmtP) $
-        (bindColBuffer lenOrIndFP txtFP)
-
-  sqlGetData hstmt = 
-   sqlBindColTplUnbound hstmt block
-   
-     where block hstmtP cdesc = do
-             let bufSize = fromIntegral (36 :: Int)
-             txtFP <- mallocForeignPtrBytes (fromIntegral bufSize)
-             lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
-             let cpos = colPosition cdesc
-                 cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchText hstmtP txtFP lenOrIndFP bufSize cpos f acc)
-                        
-             pure cbuf
-
-           fetchText hstmtP txtFP lenOrIndFP bufSize cpos f = go
-           
-             where go acc = do
-                     ret <- fmap ResIndicator $ withForeignPtr txtFP $ \txtP -> do
-                      [C.block| int {
-                        SQLRETURN ret = 0;
-                        SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
-                        SQLLEN* lenOrInd = $fptr-ptr:(SQLLEN* lenOrIndFP);
-                        ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_WCHAR, $(SQLWCHAR* txtP), $(SQLLEN bufSize), lenOrInd);
-                        return ret;
-                      }|]
-                     case isSuccessful ret of
-                       True -> do
-                           -- msgs <- getMessages (SQLSTMTRef hstmtP)
-                           lengthOrInd <- peekFP lenOrIndFP
-                           {-
-                           let actBufSize = case fromIntegral lengthOrInd of
-                                              SQL_NO_TOTAL -> bufSize - 2
-                                              _            -> lengthOrInd
-                           -}
-                           acc' <- withForeignPtr txtFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
-                           go acc'
-                       False -> pure acc
-
-
 {-
 {-
 newtype CDecimal a = CDecimal a
@@ -414,39 +352,6 @@ instance SQLBindCol (ColBuffer (CDecimal CChar)) where
   sqlBindCol hstmt = do
     ebc <- sqlBindCol (coerce (adjustColSize (+2) hstmt) :: HSTMT (ColBuffer CChar))
     pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
--}
-{-
-instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CChar)) where
-  sqlBindCol hstmt = do
-    ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CChar))
-    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
-
-instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CWchar)) where
-  sqlBindCol hstmt = do
-    ebc <- sqlBindCol (coerce hstmt :: HSTMT (ColBuffer CWchar))
-    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
--}
-{-
-instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CBinary)) where
-  sqlBindCol hstmt = do
-    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CBinary))
-    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
-
-    where bufSize = fromIntegral (natVal (Proxy :: Proxy n))
-
-instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n CWchar)) where
-  sqlBindCol hstmt = do
-    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CWchar))
-    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
-
-    where bufSize = fromIntegral ((natVal (Proxy :: Proxy n)) * 4) + 2
-
-instance (KnownNat n) => SQLBindCol (ColBuffer (CSized n (CDecimal CChar))) where
-  sqlBindCol hstmt = do
-    ebc <- sqlBindCol (coerce (adjustColSize (const bufSize) hstmt) :: HSTMT (ColBuffer CChar))
-    pure (fmap (ColBuffer . castColBufferPtr . getColBuffer) ebc)
-
-    where bufSize = fromIntegral (natVal (Proxy :: Proxy n)) + 3
 -}
 -}
 
@@ -990,7 +895,7 @@ sqlMapping =
   , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
   , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
   , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY])
-  , (typeOf (undefined :: CText)   , [SQL_WLONGVARCHAR, SQL_VARCHAR, SQL_WVARCHAR, SQL_LONGVARCHAR])    
+  , (typeOf (undefined :: CText)     , [SQL_WLONGVARCHAR, SQL_VARCHAR, SQL_WVARCHAR, SQL_LONGVARCHAR])    
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
   , (typeOf (undefined :: CLong)     , [SQL_INTEGER])
@@ -1165,3 +1070,7 @@ sqlDescribeCol hstmt colPos' = do
                         _                    -> error "Panic: impossible case"
 #endif
                     }
+
+
+guardedMallocForeignPtrBytes :: Int -> IO (ForeignPtr a)
+guardedMallocForeignPtrBytes = mallocForeignPtrBytes

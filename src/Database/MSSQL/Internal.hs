@@ -51,7 +51,6 @@ import Database.MSSQL.Internal.Ctx
 import Database.MSSQL.Internal.SQLError
 import Data.Text.Foreign as T
 import qualified Data.Text as T
--- import Text.Read
 import Data.IORef
 import Data.Word
 import Data.Int
@@ -67,18 +66,11 @@ import Data.Semigroup
 #endif
 import Data.Scientific
 import Data.Typeable
--- import qualified Data.Text.Lazy.Builder as LTB
--- import qualified Data.Text.Lazy as LT
 import GHC.TypeLits
--- import qualified Data.Text.Lazy.Encoding as LTE
--- import qualified Data.Text.Encoding as TE
 import Data.Char (isAscii)
 import Control.Exception (bracket, onException, finally)
--- import Foreign.Marshal.Utils (fillBytes)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
--- import qualified Data.ByteString.Internal as B
--- import Foreign.Marshal.Array
 import qualified Data.Text.Encoding as TE
 
 C.context $ mssqlCtx
@@ -694,12 +686,6 @@ instance FromField Int64 where
     .
     getColBuffer
 
-{-
-instance FromField Word where
-  type FieldBufferType Word = CBindCol CUBigInt
-  fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
--}
-
 instance FromField Word8 where
   type FieldBufferType Word8 = CUTinyInt
   fromField =  
@@ -707,36 +693,6 @@ instance FromField Word8 where
            (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
     .
     getColBuffer
-
-{-
-instance FromField Word16 where
-  type FieldBufferType Word16 = CBindCol CUSmallInt
-  fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
-
-instance FromField Word32 where
-  type FieldBufferType Word32 = CBindCol CULong
-  fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)
-
-instance FromField Word64 where
-  type FieldBufferType Word64 = CBindCol CUBigInt
-  fromField = Value $ \i -> extractVal i >>= (\v -> pure $ fromIntegral v)  
--}
-
-{-
-instance (KnownNat n) => FromField (Sized n T.Text) where
-  type FieldBufferType (Sized n T.Text) = CBindCol (CSized n CWchar)
-  fromField = \v -> do
-    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize cwcharP -> do
-      putStrLn $ "BufSize: " ++ show bufSize      
-      let clen = round ((fromIntegral bufSize :: Double) / 2) :: Word
-      coerce <$> T.fromPtr (coerce (cwcharP :: Ptr CWchar)) (fromIntegral clen)      
-
-instance (KnownNat n) => FromField (Sized n ASCIIText) where
-  type FieldBufferType (Sized n ASCIIText) = CBindCol (CSized n CChar)
-  fromField = \v -> do
-    extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
-      (Sized . ASCIIText . T.pack) <$> Foreign.C.peekCStringLen (ccharP, fromIntegral bufSize)
--}
 
 instance FromField Double where
   type FieldBufferType Double = CDouble
@@ -801,7 +757,10 @@ instance FromField ByteString where
     Left v' -> case v' of
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
-         withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
+         withForeignPtr bytesFP $ \bytesP -> (do
+                                         bs <- BS.packCStringLen (coerce bytesP, fromIntegral byteCount)
+                                         pure bs
+                                            )
          
     Right v' -> getDataBs v'
 
@@ -823,7 +782,6 @@ instance FromField LBS.ByteString where
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
          withForeignPtr bytesFP $ \bytesP -> (LBS.fromStrict <$> (BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
-         -- pure (LBS.fromStrict (B.fromForeignPtr (coerce bytesFP) 0 (fromIntegral byteCount)))
     Right v' -> getDataBs v'
 
     where getDataBs val = do
@@ -848,7 +806,6 @@ instance FromField T.Text where
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
          s <- withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
-         -- putStrLn $ "Bytes: " ++ show (s, BS.length s, byteCount)
          pure s
          
     Right v' -> getDataBs v'
@@ -864,35 +821,6 @@ instance FromField T.Text where
                 pure (acc <> BSB.byteString a)
             pure (LBS.toStrict (BSB.toLazyByteString bsb))
   
-{-  
-  fromField v = case getColBuffer v of
-    Left v' -> case v' of
-      BindColBuffer charCountFP textFP -> do
-         charCount <- peekFP charCountFP
-         xs <- withForeignPtr textFP $ \cp -> peekArray (fromIntegral charCount) cp
-         putStrLn $ "XS: " ++ show xs
-         putStrLn $ "charCount : " ++ show charCount         
-         case charCount == 0 of
-           True -> pure ""
-           False -> do 
-             a <- withForeignPtr textFP $ \cwcharP -> F.peekCWStringLen (cwcharP, fromIntegral charCount)
-             putStrLn $ "char : " ++ show a -- (a, charCount)
-             pure (T.pack a)
-    Right v' -> getDataTxt v'
-
-    where getDataTxt v' = do
-            bsb <- unboundWith v' mempty $
-              \bufSize lenOrInd cwcharP acc -> do
-                putStrLn $ "Bufsize and lenOrInd: " ++ show (bufSize, lenOrInd)
-                let actBufSize = if fromIntegral lenOrInd == SQL_NO_TOTAL
-                                   then Left () -- (bufSize `div` 2) - 2
-                                   else Right lenOrInd
-                a <- case actBufSize of
-                  Left _ -> F.peekCWString (coerce cwcharP)
-                  Right len -> F.peekCWStringLen (coerce cwcharP, fromIntegral len)
-                pure (acc <> T.pack a)
-            pure bsb
--}
 {-
 instance FromField Money where
   type FieldBufferType Money = CBindCol (CDecimal CChar)
@@ -981,16 +909,6 @@ inQuotes b = quote `mappend` b `mappend` quote
 newtype CBool = CBool Word8
   deriving (Num, Eq, Storable)
 #endif
-
-{-
-(<$$>) :: (Functor f, Functor g) => (a -> b) -> f (g a) -> f (g b)
-(<$$>) f = getCompose . fmap f . Compose
-
-(<**>) :: ( Applicative f
-         , Applicative g
-         ) => f (g (a -> b)) -> f (g a) -> f (g b)
-(<**>) f = getCompose . liftA2 id (Compose f) . Compose
--}
 
 newtype Money = Money { getMoney :: Scientific }
               deriving (Eq)

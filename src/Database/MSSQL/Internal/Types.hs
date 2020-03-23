@@ -175,7 +175,7 @@ instance Exception SQLColumnSizeException
 
 instance Show SQLColumnSizeException where
   show (SQLColumnSizeException e a) =
-    "Mismatch between expected column size in type and actual column size in database. Expected column size is " <>
+    "Mismatch between expected column size in type and actual column size in database. Expected column size in type is " <>
     show e <> ", but actual column size in database is " <> show a
 
 

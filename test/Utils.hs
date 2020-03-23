@@ -170,6 +170,7 @@ getSQLType a = case show $ typeOf a of
   "SQLUnbound ZonedTime" -> ("datetimeoffset", True)  
   "Sized 50 Text" -> ("NVARCHAR(50)", False)  
   "Sized 50 ASCIIText" -> ("VARCHAR(50)", False)
+  "Sized 50 ByteString" -> ("VARBINARY(50)", False)  
   e -> error $ "Panic: " <> show e
 
   
