@@ -489,9 +489,6 @@ boundWith (GetDataBoundBuffer io) f = do
       strOrInd <- peek strOrIndPtr
       f strOrInd ptr
 
-newtype CSized (size :: Nat) a = CSized { getCSized :: a }
-                              deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
-
 newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
                   deriving (Show, Eq, Generic)
 
@@ -560,12 +557,6 @@ data FieldDescriptor t = FieldDescriptor
 initColPos :: IO ColPos
 initColPos = ColPos <$> newIORef 1
 
-getCurrentColDescriptor :: HSTMT a -> IO ColDescriptor
-getCurrentColDescriptor hstmt = do
-  let (ColPos wref) = colPos hstmt
-  currColPos <- readIORef wref
-  sqlDescribeCol (getHSTMT hstmt) ( currColPos)
-
 nextColPos :: HSTMT a -> IO ()
 nextColPos hstmt = do
   let (ColPos wref) = colPos hstmt
@@ -626,9 +617,6 @@ field = RowParser
             bindColumn bt (restmt s :: HSTMT (FieldBufferType f))
         )
         fromField
-
-restmt :: forall a b. HSTMT a -> HSTMT b
-restmt (HSTMT stm cp ncs) = HSTMT stm cp ncs :: HSTMT b
 
 class FromRow t where
   fromRow :: RowParser t
@@ -778,6 +766,18 @@ instance FromField Bool where
 
     where boolFn v = if v == 1 then True else False
 
+instance (KnownNat n) => FromField (Sized n T.Text) where
+  type FieldBufferType (Sized n T.Text) = CSized n (FieldBufferType T.Text)
+  fromField = fmap Sized . fromField . coerce
+
+instance (KnownNat n) => FromField (Sized n ASCIIText) where
+  type FieldBufferType (Sized n ASCIIText) = CSized n (FieldBufferType ASCIIText)
+  fromField = fmap Sized . fromField . coerce
+
+instance (KnownNat n) => FromField (Sized n ByteString) where
+  type FieldBufferType (Sized n ByteString) = CSized n (FieldBufferType ByteString)
+  fromField = fmap Sized . fromField . coerce
+
 instance FromField ASCIIText where
   type FieldBufferType ASCIIText = CChar
   fromField v = case getColBuffer v of
@@ -847,7 +847,9 @@ instance FromField T.Text where
     Left v' -> case v' of
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
-         withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
+         s <- withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
+         -- putStrLn $ "Bytes: " ++ show (s, BS.length s, byteCount)
+         pure s
          
     Right v' -> getDataBs v'
 

@@ -205,14 +205,17 @@ unit_text = do
   res @=? pure (pure "ASDFDASGASD54234asdas;;@")  
   res1 <- query con "select CAST (N'岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍' AS NTEXT)" :: IO (Vector (Identity Text))
   res1 @=? pure (pure "岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍")
+  res1 <- query con "select CAST (N'岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍' AS NVARCHAR(12))" :: IO (Vector (Identity (Sized 12 Text)))
+  res1 @=? pure (pure "岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍")
+  
   res1 <- query con "select CAST (N'large world of text which is like really huge' AS NVARCHAR(50))" :: IO (Vector (Identity Text))
   res1 @=? pure (pure "large world of text which is like really huge")
   
   disconnect con
   pure ()
 
-unit_regression_text :: IO ()
-unit_regression_text = do
+_unit_regression_text :: IO ()
+_unit_regression_text = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   let t = "large world of text which is like really huge"
@@ -261,7 +264,7 @@ test_roundTrip =
   withResource (connect testConnectInfo)
                disconnect $ \r -> 
   testGroup "round trip tests"
-  [ testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
+  [testProperty "maxBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ maxBound @Int)
   , testProperty "minBound @Int" $ withTests 100 $ roundTrip r (Gen.int $ Range.singleton $ minBound @Int)
   
   -- , testProperty "maxBound @Int8" $ withTests 1 $ roundTrip r (Gen.int8 $ Range.singleton $ maxBound @Int8)
@@ -310,8 +313,8 @@ test_roundTrip =
   , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r (asciiText (Range.linear 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")
   -- , testProperty "@Bytestring" $ withTests 100 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
   , testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'")
-  -- , testProperty "@SizedText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> Gen.text (Range.singleton 97) Gen.unicode) (\t -> "N'" <> T.replace "'" "''" (getSized t) <> "'")
-  -- , testProperty "@SizedASCIIText 97" $ withTests 100 $ roundTripWith r (sized @97 <$> asciiText (Range.singleton 97)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")
+  -- ,  testProperty "@SizedText 50" $ withTests 100 $ roundTripWith r (sized @50 <$> Gen.text (Range.singleton 50) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> getSized t <> "'") {-
+  , testProperty "@SizedASCIIText 50" $ withTests 100 $ roundTripWith r (sized @50 <$> asciiText (Range.singleton 50)) (\t -> "'" <> T.replace "'" "''" (getASCIIText (getSized t)) <> "'")
   {-
   , testProperty "double reg" $ property $ do
       v <- evalIO $ runSession testConnectInfo $

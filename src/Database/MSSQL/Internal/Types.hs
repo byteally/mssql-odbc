@@ -168,6 +168,17 @@ instance Show SQLNumResultColsException where
     "Mismatch between expected column count and actual query column count. Expected column count is " <>
     show e <> ", but actual query column count is " <> show a
 
+data SQLColumnSizeException = SQLColumnSizeException Integer Integer
+                              deriving (Generic)
+
+instance Exception SQLColumnSizeException
+
+instance Show SQLColumnSizeException where
+  show (SQLColumnSizeException e a) =
+    "Mismatch between expected column size in type and actual column size in database. Expected column size is " <>
+    show e <> ", but actual column size in database is " <> show a
+
+
 data SQLException = SQLException {getSQLErrors :: SQLErrors }
                   deriving (Show, Generic)
 
@@ -604,4 +615,7 @@ pattern SQL_NEED_DATA <- ((ResIndicator [C.pure| SQLRETURN {SQL_NEED_DATA} |] ==
  :: ResIndicator
  #-}
 #endif
+
+restmt :: forall a b. HSTMT a -> HSTMT b
+restmt (HSTMT stm cp ncs) = HSTMT stm cp ncs :: HSTMT b
 

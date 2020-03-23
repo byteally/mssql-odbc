@@ -33,6 +33,7 @@ import Control.Monad
 import Control.Exception (throwIO)
 import Data.Word
 import Data.Text.Foreign as T
+import GHC.TypeLits
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
@@ -154,12 +155,32 @@ sqlBindColTplUnbound hstmt block = do
            exps        = maybe [] id (HM.lookup rep sqlMapping)
            rep         = typeOf (undefined :: t)
 
+newtype CSized (n :: Nat) a = CSized { getCSized :: a }
+                deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
+
 newtype CBinary = CBinary { getCBinary :: CUChar }
                 deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
+instance (SQLBindCol a, KnownNat n) => SQLBindCol (CSized n a) where
+  type ColBufferSize (CSized n a) = ColBufferSize a
+  sqlBindCol hstmt = do
+    cdesc <- getCurrentColDescriptor hstmt
+    let cSize = fromIntegral (colSize cdesc)
+        tSize = fromIntegral (natVal (Proxy :: Proxy n))
+    -- putStrLn $ "CSized : " ++ show (cSize, tSize)
+    case cSize > tSize of
+      True -> throwIO (SQLColumnSizeException tSize cSize)
+      False -> coerce <$> sqlBindCol (restmt hstmt :: HSTMT a)
+  sqlGetData hstmt = do
+    cdesc <- getCurrentColDescriptor hstmt
+    let cSize = fromIntegral (colSize cdesc)
+        tSize = fromIntegral (natVal (Proxy :: Proxy n))
+    case cSize > tSize of
+      True -> throwIO (SQLColumnSizeException tSize cSize)
+      False -> coerce <$> sqlGetData (restmt hstmt :: HSTMT a)
+      
 instance SQLBindCol CBinary where
-  type ColBufferSize CBinary = 'Unbounded
-  
+  type ColBufferSize CBinary = 'Unbounded  
   sqlBindCol hstmt = do
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
@@ -212,13 +233,12 @@ newtype CText = CText { getCText :: CBinary }
                 deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
 
 instance SQLBindCol CText where
-  type ColBufferSize CText = 'Unbounded
-  
+  type ColBufferSize CText = 'Unbounded  
   sqlBindCol hstmt = do
     sqlBindColTpl hstmt $ \hstmtP cdesc -> do
       let
         cpos = colPosition cdesc
-        bufSize = fromIntegral (colSize cdesc * 4 + 2)
+        bufSize = fromIntegral ((colSize cdesc * 4) + 2)
       binFP <- mallocForeignPtrBytes (fromIntegral bufSize)
       lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
       ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
@@ -956,6 +976,12 @@ getCurrentColDescriptorAndMove hstmt = do
     throwIO (SQLNumResultColsException expectedColSize actualColPos)
   res <- sqlDescribeCol (getHSTMT hstmt) (fromIntegral currColPos)
   pure res
+
+getCurrentColDescriptor :: HSTMT a -> IO ColDescriptor
+getCurrentColDescriptor hstmt = do
+  let (ColPos wref) = colPos hstmt
+  currColPos <- readIORef wref
+  sqlDescribeCol (getHSTMT hstmt) ( currColPos)
 
 sqlMapping :: HM.HashMap TypeRep [SQLType]
 sqlMapping =

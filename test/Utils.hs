@@ -168,8 +168,8 @@ getSQLType a = case show $ typeOf a of
   "Maybe Double" -> ("FLOAT(53)", False)
   "ZonedTime" -> ("datetimeoffset", True)
   "SQLUnbound ZonedTime" -> ("datetimeoffset", True)  
-  "Sized 97 Text" -> ("NVARCHAR(97)", False)  
-  "Sized 97 ASCIIText" -> ("VARCHAR(97)", False)
+  "Sized 50 Text" -> ("NVARCHAR(50)", False)  
+  "Sized 50 ASCIIText" -> ("VARCHAR(50)", False)
   e -> error $ "Panic: " <> show e
 
   
