@@ -273,7 +273,7 @@ releaseHSTMT stmt = do
 withHSTMT :: Connection -> (HSTMT a -> IO a) -> IO a
 withHSTMT con act = do
   bracket (allocHSTMT con)
-          (releaseHSTMT)
+          releaseHSTMT
           act
 
 sqlFetch :: HSTMT a -> IO CInt
@@ -569,7 +569,7 @@ queryWith (RowParser colBuf rowPFun) con q = do
   withHSTMT con $ \hstmt -> do
     nrcs <- sqldirect con (getHSTMT hstmt) q
     -- TODO: Run descriptor function to decide on `bt`
-    let bt = SQLBind
+    bt <- bindColumnStrategy hstmt nrcs
     colBuffer <- colBuf bt ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
     (rows, ret) <- fetchRows hstmt (rowPFun colBuffer)
     case ret of
@@ -926,6 +926,20 @@ instance Show SmallMoney where
 
 newtype Image = Image { getImage :: LBS.ByteString }
               deriving (Eq, Show)
+
+bindColumnStrategy :: HSTMT a -> CShort -> IO BindType
+bindColumnStrategy hstmt =
+  fmap go . mapM (sqlDescribeCol (getHSTMT hstmt) . fromIntegral) . enumFromTo 1
+
+  where go = foldr accFn SQLBind
+        accFn desc acc =
+          case desc of
+             d | colDataType d `elem` unboundedTypes -> SQLGetData
+               | otherwise -> acc
+
+          where unboundedTypes = [ SQL_WLONGVARCHAR, SQL_LONGVARCHAR, SQL_LONGVARBINARY ]
+
+  
 
 {-
 
