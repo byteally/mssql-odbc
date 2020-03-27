@@ -315,7 +315,7 @@ test_roundTrip1 =
   , testProperty "@Bytestring" $ withTests 50 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
   , testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'")
   , testProperty "@Maybe ASCIIText" $ withTests 100 $ roundTripWith r (Gen.maybe $ asciiText (Range.linear 0 1000)) (ppMaybeWith (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'"))
-  , testProperty "@Maybe Bytestring" $ withTests 50 $ roundTripWith r (Gen.maybe $ byteGen) (ppMaybeWith (\t -> "0x" <> T.pack (B.foldr showHex "" t)))
+  , testProperty "@Maybe Bytestring" $ withTests 60 $ roundTripWith r (Gen.maybe $ byteGen) (ppMaybeWith (\t -> "0x" <> T.pack (B.foldr showHex "" t)))
   , testProperty "@Maybe Text" $ withTests 100 $ roundTripWith r (Gen.maybe (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode))) (ppMaybeWith (\t -> "N'" <> t <> "'"))
   
   ]

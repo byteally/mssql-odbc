@@ -52,6 +52,7 @@ data HSTMT a = HSTMT
 data Connection = Connection
   { _henv :: Ptr SQLHENV
   , _hdbc :: Ptr SQLHDBC
+  
   } deriving (Show)
 
 C.context $ mssqlCtx
@@ -157,6 +158,16 @@ data ConnectInfo = ConnectInfo
   , attrAfter  :: [ConnectAttr 'ConnectAfter]
   }
 
+data Config = Config
+  { boundSizeLimit :: Word
+  , bufferSize :: Word
+  } deriving (Show, Eq)
+
+defConfig :: Config
+defConfig = Config { boundSizeLimit = _64Kb, bufferSize = _64Kb }
+
+_64Kb :: Word
+_64Kb = 65536
 
 data SQLNumResultColsException = SQLNumResultColsException { expected :: CShort, actual :: CShort }
                               deriving (Generic)

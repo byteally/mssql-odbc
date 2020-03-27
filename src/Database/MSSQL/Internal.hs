@@ -563,15 +563,14 @@ getColPos hstmt = do
 type Query = T.Text
 
 query :: forall r.(FromRow r) => Connection -> Query -> IO (Vector r)
-query = queryWith fromRow 
+query = queryWith defConfig fromRow 
 
-queryWith :: forall r.RowParser r -> Connection -> Query -> IO (Vector r)
-queryWith (RowParser colBuf rowPFun) con q = do
+queryWith :: forall r.Config -> RowParser r -> Connection -> Query -> IO (Vector r)
+queryWith cfg (RowParser colBuf rowPFun) con q = do
   withHSTMT con $ \hstmt -> do
     nrcs <- sqldirect con (getHSTMT hstmt) q
-    -- TODO: Run descriptor function to decide on `bt`
-    bt <- bindColumnStrategy hstmt nrcs
-    colBuffer <- colBuf bt ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
+    bt <- bindColumnStrategy cfg hstmt nrcs
+    colBuffer <- colBuf bt cfg ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
     (rows, ret) <- fetchRows hstmt (rowPFun colBuffer)
     case ret of
           SQL_SUCCESS           -> pure rows
@@ -589,7 +588,7 @@ execute con q = do
   
 data RowParser t =
   forall rowbuff.
-  RowParser { rowBuffer    :: BindType -> HSTMT () -> IO rowbuff
+  RowParser { rowBuffer    :: BindType -> Config -> HSTMT () -> IO rowbuff
             , runRowParser :: rowbuff -> IO t
             }
 
@@ -599,15 +598,15 @@ instance Functor RowParser where
     pure (f res)
 
 instance Applicative RowParser where
-  pure a = RowParser (\_ _ -> pure ()) (const (pure a))
+  pure a = RowParser (\_ _ _ -> pure ()) (const (pure a))
   (RowParser b1 f) <*> (RowParser b2 a) =
-    RowParser (\bt hstmt -> (,) <$> b1 bt hstmt <*> b2 bt hstmt) $
+    RowParser (\bt cfg hstmt -> (,) <$> b1 bt cfg hstmt <*> b2 bt cfg hstmt) $
     \(b1', b2') -> f b1' <*> a b2'
 
 field :: forall f. FromField f => RowParser f
 field = RowParser
-        (\bt s ->
-            bindColumn bt (restmt s :: HSTMT (FieldBufferType f))
+        (\bt cfg s ->
+            bindColumn bt cfg (restmt s :: HSTMT (FieldBufferType f))
         )
         fromField
 
@@ -938,15 +937,16 @@ instance Show SmallMoney where
 newtype Image = Image { getImage :: LBS.ByteString }
               deriving (Eq, Show)
 
-bindColumnStrategy :: HSTMT a -> CShort -> IO BindType
-bindColumnStrategy hstmt =
+bindColumnStrategy :: Config -> HSTMT a -> CShort -> IO BindType
+bindColumnStrategy cfg hstmt =
   fmap go . mapM (sqlDescribeCol (getHSTMT hstmt) . fromIntegral) . enumFromTo 1
 
   where go = foldr accFn SQLBind
+        maxColSize = boundSizeLimit cfg 
         accFn desc acc =
           case desc of
              d | colDataType d `elem` unboundedTypes -> SQLGetData
-               | colSize d > _64Kb  -> SQLGetData
+               | colSize d > maxColSize  -> SQLGetData
                | otherwise -> acc
 
           where unboundedTypes = [ SQL_WLONGVARCHAR, SQL_LONGVARCHAR, SQL_LONGVARBINARY ]

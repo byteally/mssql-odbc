@@ -94,9 +94,9 @@ data BindType =
     SQLBind
   | SQLGetData
 
-bindColumn :: (SQLBindCol t) => BindType -> HSTMT t -> IO (ColBuffer t)
-bindColumn SQLBind = fmap (ColBuffer . Left) . sqlBindCol
-bindColumn SQLGetData = fmap (ColBuffer . Right) . sqlGetData
+bindColumn :: (SQLBindCol t) => BindType -> Config -> HSTMT t -> IO (ColBuffer t)
+bindColumn SQLBind _ = fmap (ColBuffer . Left) . sqlBindCol
+bindColumn SQLGetData cfg = fmap (ColBuffer . Right) . sqlGetData cfg
 
 newtype ColBuffer t = ColBuffer
   { getColBuffer :: Either (ColBufferType 'BindCol t)
@@ -108,7 +108,7 @@ class SQLBindCol t where
   type ColBufferSize t = 'Bounded
   
   sqlBindCol :: HSTMT t -> IO (ColBufferType 'BindCol t)
-  sqlGetData :: HSTMT t -> IO (ColBufferType (GetColBufferTypeFromSize (ColBufferSize t)) t)
+  sqlGetData :: Config -> HSTMT t -> IO (ColBufferType (GetColBufferTypeFromSize (ColBufferSize t)) t)
 
 sqlBindColTpl :: forall t. (Typeable t) =>
                       HSTMT t ->
@@ -170,13 +170,13 @@ instance (KnownNat n, SQLBindCol a) => SQLBindCol (CSized n a) where
     case cSize == tSize of
       False -> throwIO (SQLColumnSizeException tSize cSize)
       True -> coerce <$> sqlBindCol (restmt hstmt :: HSTMT a)
-  sqlGetData hstmt = do
+  sqlGetData cfg hstmt = do
     cdesc <- getCurrentColDescriptor hstmt
     let cSize = fromIntegral (colSize cdesc)
         tSize = fromIntegral (natVal (Proxy :: Proxy n))
     case cSize == tSize of
       False -> throwIO (SQLColumnSizeException tSize cSize)
-      True -> coerce <$> sqlGetData (restmt hstmt :: HSTMT a)
+      True -> coerce <$> sqlGetData cfg (restmt hstmt :: HSTMT a)
 
 instance SQLBindCol CBinary where
   type ColBufferSize CBinary = 'Unbounded  
@@ -198,11 +198,11 @@ instance SQLBindCol CBinary where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         bindColBuffer lenOrIndFP (coerce binFP)
 
-  sqlGetData hstmt = 
+  sqlGetData cfg hstmt = 
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral _64Kb
+             let bufSize = fromIntegral (bufferSize cfg)
              binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
@@ -250,17 +250,16 @@ instance SQLBindCol CText where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         bindColBuffer lenOrIndFP (coerce binFP)
 
-  sqlGetData hstmt = 
+  sqlGetData cfg hstmt = 
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral _64Kb
+             let bufSize = fromIntegral (bufferSize cfg)
              binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)
-                        
+                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)                        
              pure cbuf
 
            fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f = go           
@@ -301,17 +300,16 @@ instance SQLBindCol CChar where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP (coerce chrFP))
   
-  sqlGetData hstmt = 
+  sqlGetData cfg hstmt = 
    sqlBindColTplUnbound hstmt block
    
      where block hstmtP cdesc = do
-             let bufSize = fromIntegral _64Kb
+             let bufSize = fromIntegral (bufferSize cfg)
              chrFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
                  cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchChars hstmtP chrFP lenOrIndFP bufSize cpos f acc)
-                        
+                                               fetchChars hstmtP chrFP lenOrIndFP bufSize cpos f acc)                        
              pure cbuf
 
            fetchChars hstmtP chrFP lenOrIndFP bufSize cpos f = go
@@ -372,7 +370,7 @@ instance SQLBindCol CUTinyInt where
         returnWithRetCode ret (SQLSTMTRef hstmtP) $
           (bindColBuffer lenOrIndFP $ castForeignPtr chrFP)
 
-  sqlGetData hstmt =  
+  sqlGetData _ hstmt =  
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
         chrFP <- mallocForeignPtr
         let cpos = colPosition cdesc
@@ -425,7 +423,7 @@ instance SQLBindCol CLong where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP (coerce intFP))
 
-  sqlGetData hstmt = 
+  sqlGetData _ hstmt = 
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
       let cpos = colPosition cdesc
       intFP :: ForeignPtr CLong <- mallocForeignPtr
@@ -480,7 +478,7 @@ instance SQLBindCol CSmallInt where
        returnWithRetCode ret (SQLSTMTRef hstmtP) $
          (bindColBuffer lenOrIndFP $ coerce shortFP)
 
-  sqlGetData hstmt = 
+  sqlGetData _ hstmt = 
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do 
        let cpos = colPosition cdesc
        shortFP <- mallocForeignPtr           
@@ -535,7 +533,7 @@ instance SQLBindCol CFloat where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP (coerce floatFP))
 
-  sqlGetData hstmt =
+  sqlGetData _ hstmt =
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
       let cpos = colPosition cdesc
       floatFP <- mallocForeignPtr
@@ -570,7 +568,7 @@ instance SQLBindCol CDouble where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP (coerce floatFP))
 
-  sqlGetData hstmt =
+  sqlGetData _ hstmt =
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
       let cpos = colPosition cdesc
       floatFP <- mallocForeignPtr
@@ -603,7 +601,7 @@ instance SQLBindCol CBool where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP $ castForeignPtr chrFP)
 
-  sqlGetData hstmt =
+  sqlGetData _ hstmt =
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do    
       let cpos = colPosition cdesc
       chrFP <- mallocForeignPtr
@@ -637,7 +635,7 @@ instance SQLBindCol CDate where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP (coerce dateFP))
 
-  sqlGetData hstmt = do
+  sqlGetData _ hstmt = do
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do    
       let cpos = colPosition cdesc
       dateFP <- mallocForeignPtr
@@ -672,7 +670,7 @@ instance SQLBindCol CBigInt where
       returnWithRetCode ret (SQLSTMTRef hstmtP) $
         (bindColBuffer lenOrIndFP $ coerce llongFP)
 
-  sqlGetData hstmt =
+  sqlGetData _ hstmt =
       sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
        let cpos = colPosition cdesc
        llongFP :: ForeignPtr CLLong <- mallocForeignPtr
@@ -728,7 +726,7 @@ instance SQLBindCol CTimeOfDay where
      returnWithRetCode ret (SQLSTMTRef hstmtP) $
        (bindColBuffer lenOrIndFP (coerce todFP))
 
-  sqlGetData hstmt = do
+  sqlGetData _ hstmt = do
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
      let cpos = colPosition cdesc
      todFP <- mallocForeignPtr 
@@ -763,7 +761,7 @@ instance SQLBindCol CLocalTime where
        returnWithRetCode ret (SQLSTMTRef hstmtP) $
          (bindColBuffer lenOrIndFP (coerce ltimeFP))
 
-  sqlGetData hstmt = do
+  sqlGetData _ hstmt = do
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do
        let cpos = colPosition cdesc
        ltimeFP <- mallocForeignPtr
@@ -797,7 +795,7 @@ instance SQLBindCol CZonedTime where
      returnWithRetCode ret (SQLSTMTRef hstmtP) $
        (bindColBuffer lenOrIndFP (coerce ltimeFP))
 
-  sqlGetData hstmt =
+  sqlGetData _ hstmt =
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do    
      let cpos = colPosition cdesc
      ltimeFP <- mallocForeignPtr
@@ -832,7 +830,7 @@ instance SQLBindCol UUID where
      returnWithRetCode ret (SQLSTMTRef hstmtP) $
        (bindColBuffer lenOrIndFP (coerce uuidFP))
 
-  sqlGetData hstmt =
+  sqlGetData _ hstmt =
    sqlBindColTplBound hstmt $ \hstmtP cdesc -> pure $ getDataBoundBuffer $ do    
      let cpos = colPosition cdesc
      uuidFP <- mallocForeignPtr
@@ -1075,5 +1073,3 @@ sqlDescribeCol hstmt colPos' = do
 guardedMallocForeignPtrBytes :: Int -> IO (ForeignPtr a)
 guardedMallocForeignPtrBytes = mallocForeignPtrBytes
 
-_64Kb :: Word
-_64Kb = 65536
