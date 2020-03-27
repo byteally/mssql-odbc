@@ -170,7 +170,11 @@ getSQLType a = case show $ typeOf a of
   "SQLUnbound ZonedTime" -> ("datetimeoffset", True)  
   "Sized 50 Text" -> ("NVARCHAR(50)", False)  
   "Sized 50 ASCIIText" -> ("VARCHAR(50)", False)
-  "Sized 50 ByteString" -> ("VARBINARY(50)", False)  
+  "Sized 50 ByteString" -> ("VARBINARY(50)", False)
+  "Maybe ByteString" -> ("VARBINARY(500)", False)
+  "Maybe ASCIIText" -> ("VARCHAR(5000)", False)
+  "Maybe Text" -> ("NTEXT", False)
+  
   e -> error $ "Panic: " <> show e
 
   
@@ -196,19 +200,6 @@ localConnectionStr =
                    , odbcDriver        = odbcSQLServer17
                    , connectProperties = HM.singleton "ApplicationIntent" "ReadOnly"
                    }
-
-locConnStr :: ConnectionString
-locConnStr = ConnectionString
-  { database          = "returns"
-  , server            = "slstwinfordb01.ad.sunlandls.com"
-                      -- "10.10.0.33" --"slstwinfordb01.ad.sunlandls.com"
-  , port              = 1433
-  , user              = "sunlandls"
-  , password          = "sunland.wms~123"
-  , odbcDriver        = odbcSQLServer17
-  , connectProperties = mempty
-  }  
-
 
 testConnectInfo :: ConnectInfo
 testConnectInfo = connectInfo localConnectionStr -- locConnStr

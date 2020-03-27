@@ -72,6 +72,7 @@ import Control.Exception (bracket, onException, finally)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
 import qualified Data.Text.Encoding as TE
+import qualified Unsafe.Coerce as U
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
@@ -885,7 +886,7 @@ instance FromField UUID where
     getColBuffer
 
 -- NOTE: There is no generic lengthOrIndicatorFP
-instance FromField a => FromField (Maybe a) where
+instance (FromField a, Storable (FieldBufferType a)) => FromField (Maybe a) where
   type FieldBufferType (Maybe a) = FieldBufferType a
   fromField v = case getColBuffer v of
       Left (BindColBuffer fptr _) -> do 
@@ -893,8 +894,18 @@ instance FromField a => FromField (Maybe a) where
         if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
           then pure Nothing
           else Just <$> (fromField v)
-      Right _ -> pure Nothing
-          -- fromField (ColBuffer (getDataUnboundBuffer $ \a accf -> k (Just a) $ \len ptr a -> if fromIntegral len == SQL_NULL_DATA then pure Nothing else Just <$> accf len ptr a))
+      Right (GetDataBoundBuffer io) -> do 
+        (fp, lenOrIndFP) <- io
+        lenOrInd <- peekFP lenOrIndFP
+        case lenOrInd == fromIntegral SQL_NULL_DATA of
+          True  -> pure Nothing
+          False -> Just <$> fromField (ColBuffer (Right (GetDataBoundBuffer (pure (castForeignPtr fp, lenOrIndFP)))))       
+      Right x@(GetDataUnboundBuffer _) -> do
+        unboundWith x Nothing $ \bufSize lenOrInd ptr a -> do
+          case lenOrInd == fromIntegral SQL_NULL_DATA of
+            True -> pure Nothing 
+            False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer (\a' f -> f bufSize lenOrInd ptr (maybe a' U.unsafeCoerce a)))))
+      _ -> error "Panic: impossible case @fromField"
   
 instance FromField a => FromField (Identity a) where
   type FieldBufferType (Identity a) = FieldBufferType a

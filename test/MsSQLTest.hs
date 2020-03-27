@@ -314,21 +314,21 @@ test_roundTrip1 =
   , testProperty "@ASCIIText" $ withTests 100 $ roundTripWith r (asciiText (Range.linear 0 1000)) (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'")
   , testProperty "@Bytestring" $ withTests 50 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
   , testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'")
-  {-
-  , testProperty "double reg" $ property $ do
-      v <- evalIO $ runSession testConnectInfo $
-        query_ "select CAST ( -100.0 AS FLOAT(53))"
-      v === Right (V.fromList [Identity (-100.0 :: Double)])
-  -}
+  , testProperty "@Maybe ASCIIText" $ withTests 100 $ roundTripWith r (Gen.maybe $ asciiText (Range.linear 0 1000)) (ppMaybeWith (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'"))
+  , testProperty "@Maybe Bytestring" $ withTests 50 $ roundTripWith r (Gen.maybe $ byteGen) (ppMaybeWith (\t -> "0x" <> T.pack (B.foldr showHex "" t)))
+  , testProperty "@Maybe Text" $ withTests 100 $ roundTripWith r (Gen.maybe (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode))) (ppMaybeWith (\t -> "N'" <> t <> "'"))
+  
   ]
 
   where toMoney i64 = Money (read (show i64) / 10000)
         toSmallMoney i32 = SmallMoney (read (show i32) / 10000)
         byteGen = db_bytes (Range.linear 0 1000)
         doubleNull = BS.pack [0x0, 0x0]
-        ppMaybe a = case a of
-                      Nothing -> "null"
-                      Just v  -> T.pack $ show v
+        ppMaybe = ppMaybeWith (T.pack . show)
+        ppMaybeWith f a = case a of
+          Nothing -> "null"
+          Just v  -> f v
+                      
         ppZonedTime (ZonedTime lt tz) =
           T.pack $ show lt <> " " <> ppTz tz
 
