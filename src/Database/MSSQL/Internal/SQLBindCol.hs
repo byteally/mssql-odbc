@@ -276,6 +276,7 @@ instance SQLBindCol CText where
                        True -> do
                            lengthOrInd <- peekFP lenOrIndFP
                            acc' <- withForeignPtr binFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
+                           
                            go acc'
                        False -> pure acc
 
@@ -919,7 +920,7 @@ returnWithRetCode ret ref a =
     False -> getErrors ret ref >>= throwSQLException
 
 unboundWith :: 
-  Storable t =>
+  (Storable t, Typeable a) =>
   ColBufferType 'GetDataUnbound t ->
   a ->
   (CLong -> CLong -> Ptr t -> a -> IO a) ->
@@ -965,7 +966,6 @@ getMessages handleRef = do
              SQLWCHAR eMSG [SQL_MAX_MESSAGE_LENGTH];
              SQLSMALLINT eMSGLen;
              SQLHANDLE handle = $(SQLHANDLE handle);
-             printf("%d", SQL_MAX_MESSAGE_LENGTH);
              void (*appendMessage)(SQLWCHAR*, int, SQLWCHAR*, int) = $(void (*appendMessage)(SQLWCHAR*, int, SQLWCHAR*, int));
              do {
                ret = SQLGetDiagRecW((SQLSMALLINT)$(int handleType), handle, ++i, eState, NULL, eMSG, SQL_MAX_MESSAGE_LENGTH, &eMSGLen);
@@ -1007,7 +1007,6 @@ getMessages handleRef = do
 
 getErrors :: ResIndicator -> HandleRef -> IO SQLErrors
 getErrors res handleRef = do
-  putStrLn $  "in get errors: " ++ show res
   msgE <- getMessages handleRef
   pure $ SQLErrors $ case msgE of
     Left es -> [es]

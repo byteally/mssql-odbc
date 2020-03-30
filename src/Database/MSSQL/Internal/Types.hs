@@ -35,6 +35,7 @@ import qualified Language.C.Inline as C
 import Database.MSSQL.Internal.SQLTypes
 import Database.MSSQL.Internal.Ctx
 import Data.UUID.Types (UUID)
+import Data.Typeable
 
 data SQLHENV
 data SQLHDBC
@@ -236,7 +237,7 @@ data ColBufferTypeK =
 data ColBufferType (k :: ColBufferTypeK) t where
   BindColBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'BindCol t
   GetDataBoundBuffer :: IO (ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataBound t
-  GetDataUnboundBuffer :: (forall a. a -> (CLong -> CLong -> Ptr t -> a -> IO a) -> IO a) -> ColBufferType 'GetDataUnbound t
+  GetDataUnboundBuffer :: (forall a. Typeable a => a -> (CLong -> CLong -> Ptr t -> a -> IO a) -> IO a) -> ColBufferType 'GetDataUnbound t
 
 data ColBufferSizeK =
     Unbounded

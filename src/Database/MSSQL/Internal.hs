@@ -72,7 +72,7 @@ import Control.Exception (bracket, onException, finally)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
 import qualified Data.Text.Encoding as TE
-import qualified Unsafe.Coerce as U
+-- import qualified Unsafe.Coerce as U
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
@@ -812,10 +812,11 @@ instance FromField T.Text where
 
     where getDataBs val = do
             bsb <- unboundWith val mempty $
-              \bufSize lenOrInd ccharP acc -> do
+              \bufSize lenOrInd ccharP acc -> do 
                 let actBufSize = case fromIntegral lenOrInd of
                                    SQL_NO_TOTAL -> bufSize
                                    i | i > fromIntegral bufSize -> bufSize
+                                   i | i < 0 -> error $ "Panic: die: " ++ show i
                                    len -> fromIntegral len
                 a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
                 pure (acc <> BSB.byteString a)
@@ -885,7 +886,7 @@ instance FromField UUID where
     getColBuffer
 
 -- NOTE: There is no generic lengthOrIndicatorFP
-instance (FromField a, Storable (FieldBufferType a)) => FromField (Maybe a) where
+instance (FromField a, Storable (FieldBufferType a), Typeable a) => FromField (Maybe a) where
   type FieldBufferType (Maybe a) = FieldBufferType a
   fromField v = case getColBuffer v of
       Left (BindColBuffer fptr _) -> do 
@@ -903,7 +904,12 @@ instance (FromField a, Storable (FieldBufferType a)) => FromField (Maybe a) wher
         unboundWith x Nothing $ \bufSize lenOrInd ptr a -> do
           case lenOrInd == fromIntegral SQL_NULL_DATA of
             True -> pure Nothing 
-            False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer (\a' f -> f bufSize lenOrInd ptr (maybe a' U.unsafeCoerce a)))))
+            False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer (\a' f ->
+                                                                                   f bufSize lenOrInd ptr (maybe a' (unifyUnsafeCoerce a') a)))))
+
+          where
+            unifyUnsafeCoerce :: forall a1 b1. a1 -> b1 -> a1
+            unifyUnsafeCoerce _ _b = error "Panic: Multiple runs for Unbounded Maybe failed"
       _ -> error "Panic: impossible case @fromField"
   
 instance FromField a => FromField (Identity a) where

@@ -171,8 +171,19 @@ _unit_double = do
   disconnect con
   pure ()
 
-_unit_bytestring :: IO ()
-_unit_bytestring = do
+unit_maybe :: IO ()
+unit_maybe = do
+  let conInfo = testConnectInfo
+  con <- connect conInfo
+  print "maybe test"
+  res <- query con "select CAST (null AS BIGINT)" :: IO (Vector (Identity (Maybe Int)))
+  print res
+  pure (pure Nothing) @=? res
+  disconnect con
+  pure ()
+
+unit_bytestring :: IO ()
+unit_bytestring = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   print "bytestring test"
@@ -199,8 +210,8 @@ unit_text = do
   con <- connect conInfo
   let t1 = ""
   print "bbbbb test"
-  res <- query con "select CAST (N'AB' AS NTEXT)" :: IO (Vector (Identity Text))
-  res @=? pure (pure "AB")
+  res <- query con "select CAST (N'' AS NTEXT)" :: IO (Vector (Identity Text))
+  res @=? pure (pure "")
   res <- query con "select CAST (N'ASDFDASGASD54234asdas;;@' AS NTEXT)" :: IO (Vector (Identity Text))
   res @=? pure (pure "ASDFDASGASD54234asdas;;@")  
   res1 <- query con "select CAST (N'岧㊪藺绩鉒쀷꯶隇㏛骝⠃騍' AS NTEXT)" :: IO (Vector (Identity Text))
@@ -224,8 +235,8 @@ unit_regression_text = do
   disconnect con
   pure ()
 
-_unit_timeOfDay :: IO ()
-_unit_timeOfDay = do
+unit_timeOfDay :: IO ()
+unit_timeOfDay = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   --let -- s = "'00:00:00'"  
@@ -315,7 +326,7 @@ test_roundTrip1 =
   , testProperty "@Bytestring" $ withTests 50 $ roundTripWith r byteGen (\t -> "0x" <> T.pack (B.foldr showHex "" t))
   , testProperty "@Text" $ withTests 100 $ roundTripWith r (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode)) (\t -> "N'" <> t <> "'")
   , testProperty "@Maybe ASCIIText" $ withTests 100 $ roundTripWith r (Gen.maybe $ asciiText (Range.linear 0 1000)) (ppMaybeWith (\t -> "'" <> T.replace "'" "''" (getASCIIText t) <> "'"))
-  , testProperty "@Maybe Bytestring" $ withTests 60 $ roundTripWith r (Gen.maybe $ byteGen) (ppMaybeWith (\t -> "0x" <> T.pack (B.foldr showHex "" t)))
+  , testProperty "@Maybe Bytestring" $ withTests 50 $ roundTripWith r (Gen.maybe $ byteGen) (ppMaybeWith (\t -> "0x" <> T.pack (B.foldr showHex "" t)))
   , testProperty "@Maybe Text" $ withTests 100 $ roundTripWith r (Gen.maybe (Gen.text (Range.linear 0 1000) (Gen.filter (\x -> ord x > 40 && x /= '\'') Gen.unicode))) (ppMaybeWith (\t -> "N'" <> t <> "'"))
   
   ]
