@@ -36,7 +36,6 @@ import Database.MSSQL.Internal.Types
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
--- import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Builder as BSB
 import qualified Language.C.Inline as C
 import Foreign.Storable
@@ -72,7 +71,6 @@ import Control.Exception (bracket, onException, finally, throwIO)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
 import qualified Data.Text.Encoding as TE
--- import qualified Unsafe.Coerce as U
 
 C.context $ mssqlCtx
   [ ("SQLWCHAR", [t|CWchar|])
@@ -277,9 +275,10 @@ withHSTMT con act = do
           releaseHSTMT
           act
 
-sqlFetch :: HSTMT a -> IO CInt
+sqlFetch :: HSTMT a -> IO ResIndicator
 sqlFetch stmt = do
-  [C.block| int {
+  ResIndicator <$>
+   [C.block| int {
       SQLRETURN ret = 0;
       SQLHSTMT hstmt = $(SQLHSTMT hstmt);
 
@@ -330,23 +329,22 @@ sqlGetInfo con _  = do
 
 withTransaction :: Connection -> IO a -> IO a
 withTransaction (Connection { _hdbc = hdbcp }) io = do
-  sqlSetAutoCommitOff hdbcp
+  setAutoCommitOff hdbcp
   go `onException` rollback hdbcp
-     `finally` sqlSetAutoCommitOn hdbcp
+     `finally` setAutoCommitOn hdbcp
   where go = do
           a <- io
           commit hdbcp
           pure a
 
 setConnectAttr :: Ptr SQLHDBC -> ConnectAttr a -> IO ()
-setConnectAttr _hdbcp _connAttr = pure () {-do
-  (attr, vptr, len) <- setConnectAttrPtr connAttr
-  ret <- sqlSetConnectAttr hdbcp attr vptr len
+setConnectAttr hdbcp connAttr = do
+  (attr, fvptr, len) <- setConnectAttrPtr connAttr
+  ret <- withForeignPtr fvptr $ \vptr -> sqlSetConnectAttr hdbcp attr vptr len
   case isSuccessful ret of
     False -> do
       getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
     True -> pure ()
--}
 
 {-
 getConnectAttr :: Ptr SQLHDBC -> AttrName -> IO (Maybe (ConnectAttr a))
@@ -369,8 +367,8 @@ getConnectAttr hdbcp attr = do
     True -> getConnectAttrPtr attr (castForeignPtr vptr) outLenPtr
 -}
 
-sqlSetAutoCommitOn :: Ptr SQLHDBC -> IO ()
-sqlSetAutoCommitOn hdbcp = do
+setAutoCommitOn :: Ptr SQLHDBC -> IO ()
+setAutoCommitOn hdbcp = do
   ret <- sqlSetConnectAttr hdbcp [C.pure| SQLINTEGER { SQL_ATTR_AUTOCOMMIT } |]
                           (intPtrToPtr (fromIntegral [C.pure| SQLUINTEGER { SQL_AUTOCOMMIT_ON }|]))
                           [C.pure| SQLINTEGER { SQL_IS_UINTEGER } |]  
@@ -379,8 +377,8 @@ sqlSetAutoCommitOn hdbcp = do
       getErrors ret (SQLDBCRef hdbcp) >>= throwSQLException
     True -> pure ()
 
-sqlSetAutoCommitOff :: Ptr SQLHDBC -> IO ()
-sqlSetAutoCommitOff hdbcp = do
+setAutoCommitOff :: Ptr SQLHDBC -> IO ()
+setAutoCommitOff hdbcp = do
   ret <- sqlSetConnectAttr hdbcp [C.pure| SQLINTEGER { SQL_ATTR_AUTOCOMMIT } |]
                           (intPtrToPtr (fromIntegral [C.pure| SQLUINTEGER { SQL_AUTOCOMMIT_OFF }|]))
                           [C.pure| SQLINTEGER { SQL_IS_UINTEGER } |]
@@ -427,14 +425,13 @@ sqlSetConnectAttr hdbcp attr vptr len =
       return ret;
       } |]
 
--- TODO: Note void* next to SQLPOINTER, antiquoter gave a parse error.
 sqlGetConnectAttr :: Ptr SQLHDBC -> CLong -> ForeignPtr () -> CLong -> ForeignPtr CLong -> IO ResIndicator
 sqlGetConnectAttr hdbcp attr vptr len outLenPtr =
   ResIndicator <$> [C.block| int {
       SQLRETURN ret = 0;
       SQLHDBC hdbcp = $(SQLHDBC hdbcp);
       SQLINTEGER attr = $(SQLINTEGER attr);
-      SQLPOINTER vptr = $fptr-ptr:(void* vptr);
+      SQLPOINTER vptr = $fptr-ptr:(SQLPOINTER vptr);
       SQLINTEGER len = $(SQLINTEGER len);
       SQLINTEGER* outLenPtr = $fptr-ptr:(SQLINTEGER* outLenPtr);            
       ret = SQLGetConnectAttr(hdbcp, attr, vptr, len, outLenPtr);
@@ -451,11 +448,11 @@ extractWith ::
   ColBufferType 'BindCol t ->
   IO b
 extractWith f cbuff = case cbuff of
-  BindColBuffer lenOrIndFP cbuffPtr -> do
+  BindColBuffer cdesc lenOrIndFP cbuffPtr -> do
     lenOrInd <- peekFP lenOrIndFP
     case fromIntegral lenOrInd of
-      SQL_NULL_DATA -> throwIO SQLNullDataException
-      SQL_NO_TOTAL -> throwIO SQLNoTotalException
+      SQL_NULL_DATA -> throwIO (SQLNullDataException cdesc)
+      SQL_NO_TOTAL -> throwIO (SQLNoTotalException cdesc)
       _ -> withForeignPtr cbuffPtr (f lenOrInd)
 
 castColBufferPtr ::
@@ -463,12 +460,12 @@ castColBufferPtr ::
   ColBufferType bt t1 ->
   ColBufferType bt t2
 castColBufferPtr cbuff = case cbuff of
-  BindColBuffer lenOrIndFP cbuffPtr ->
-    BindColBuffer lenOrIndFP (castForeignPtr cbuffPtr)
-  GetDataUnboundBuffer bufSize k ->
-    GetDataUnboundBuffer bufSize (coerce k)
-  GetDataBoundBuffer act ->
-    GetDataBoundBuffer $ do
+  BindColBuffer cdesc lenOrIndFP cbuffPtr ->
+    BindColBuffer cdesc lenOrIndFP (castForeignPtr cbuffPtr)
+  GetDataUnboundBuffer cdesc bufSize k ->
+    GetDataUnboundBuffer cdesc bufSize (coerce k)
+  GetDataBoundBuffer cdesc act ->
+    GetDataBoundBuffer cdesc $ do
       (fptr, lenOrInd) <- act
       pure (castForeignPtr fptr, lenOrInd)
 
@@ -476,14 +473,14 @@ boundWith ::
   ColBufferType 'GetDataBound t ->
   (CLong -> Ptr t -> IO a)       ->
   IO a
-boundWith (GetDataBoundBuffer io) f = do
+boundWith (GetDataBoundBuffer cdesc io) f = do
   (fptr, lenOrIndFP) <- io
   withForeignPtr fptr $ \ptr ->
     withForeignPtr lenOrIndFP $ \lenOrIndP -> do
       lenOrInd <- peek lenOrIndP
       case fromIntegral lenOrInd of
-        SQL_NULL_DATA -> throwIO SQLNullDataException
-        SQL_NO_TOTAL -> throwIO SQLNoTotalException
+        SQL_NULL_DATA -> throwIO (SQLNullDataException cdesc)
+        SQL_NO_TOTAL -> throwIO (SQLNoTotalException cdesc)
         _ -> f lenOrInd ptr
 
 newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
@@ -518,7 +515,7 @@ fetchRows hstmt rowP = do
   retRef <- newIORef SQL_SUCCESS
   rows <- flip V.unfoldrM () $ \_ -> do
     res <- sqlFetch hstmt
-    case ResIndicator $ fromIntegral res of
+    case res of
       SQL_SUCCESS -> do
         r <- rowP
         pure $ Just (r, ())
@@ -567,9 +564,9 @@ getColPos hstmt = do
 type Query = T.Text
 
 query :: forall r.(FromRow r) => Connection -> Query -> IO (Vector r)
-query = queryWith defConfig fromRow 
+query = queryWith defQueryConfig fromRow 
 
-queryWith :: forall r.Config -> RowParser r -> Connection -> Query -> IO (Vector r)
+queryWith :: forall r.QueryConfig -> RowParser r -> Connection -> Query -> IO (Vector r)
 queryWith cfg (RowParser colBuf rowPFun) con q = do
   withHSTMT con $ \hstmt -> do
     nrcs <- sqldirect con (getHSTMT hstmt) q
@@ -592,7 +589,7 @@ execute con q = do
   
 data RowParser t =
   forall rowbuff.
-  RowParser { rowBuffer    :: BindType -> Config -> HSTMT () -> IO rowbuff
+  RowParser { rowBuffer    :: BindType -> QueryConfig -> HSTMT () -> IO rowbuff
             , runRowParser :: rowbuff -> IO t
             }
 
@@ -742,31 +739,31 @@ instance FromField ASCIIText where
   type FieldBufferType ASCIIText = CChar
   fromField v = case getColBuffer v of
     Left v' -> case v' of
-      BindColBuffer charCountFP textFP -> do
+      BindColBuffer _ charCountFP textFP -> do
          charCount <- peekFP charCountFP
          a <- withForeignPtr textFP $ \ccharP -> F.peekCStringLen (coerce ccharP, fromIntegral charCount)
          pure (ASCIIText (T.pack a))
     Right v' -> case v' of
-      GetDataUnboundBuffer _ io -> ASCIIText <$> getDataTxt io
+      GetDataUnboundBuffer cdesc _ io -> ASCIIText <$> getDataTxt cdesc io
 
-    where getDataTxt io = do
+    where getDataTxt cdesc io = do
             (fetch, ccharFP, lenOrIndFP) <- io
-            go lenOrIndFP ccharFP fetch mempty
+            go cdesc lenOrIndFP ccharFP fetch mempty
 
-          go lenOrIndFP ccharFP fetch = loop0
+          go cdesc lenOrIndFP ccharFP fetch = loop0
             where loop0 acc = do
                       ret <- fetch
                       lenOrInd <- peekFP lenOrIndFP
                       case ret of
                         SQL_SUCCESS -> do
                           case fromIntegral lenOrInd of
-                            SQL_NULL_DATA -> throwIO SQLNullDataException
+                            SQL_NULL_DATA -> throwIO (SQLNullDataException cdesc)
                             _ -> do
                               a <- withForeignPtr ccharFP F.peekCString
                               pure (acc <> T.pack a)
                         SQL_SUCCESS_WITH_INFO -> do
                           case fromIntegral lenOrInd of
-                            SQL_NULL_DATA -> throwIO SQLNullDataException
+                            SQL_NULL_DATA -> throwIO (SQLNullDataException cdesc)
                             _ -> do                          
                               a <- withForeignPtr ccharFP F.peekCString
                               loop0 (acc <> T.pack a)                         
@@ -777,7 +774,7 @@ instance FromField ByteString where
   type FieldBufferType ByteString = CBinary
   fromField v = case getColBuffer v of
     Left v' -> case v' of
-      (BindColBuffer byteCountFP bytesFP) -> do
+      (BindColBuffer _ byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
          withForeignPtr bytesFP $ \bytesP -> (do
                                          bs <- BS.packCStringLen (coerce bytesP, fromIntegral byteCount)
@@ -785,18 +782,18 @@ instance FromField ByteString where
                                             )
          
     Right v' -> case v' of
-      GetDataUnboundBuffer bufSize io -> LBS.toStrict . BSB.toLazyByteString <$> bsParts bufSize io
+      GetDataUnboundBuffer cdesc bufSize io -> LBS.toStrict . BSB.toLazyByteString <$> bsParts cdesc bufSize io
 
 instance FromField LBS.ByteString where
   type FieldBufferType LBS.ByteString = CBinary
   fromField v = case getColBuffer v of
     Left v' -> case v' of
-      (BindColBuffer byteCountFP bytesFP) -> do
+      (BindColBuffer _ byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
          withForeignPtr bytesFP $ \bytesP -> (LBS.fromStrict <$> (BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
 
     Right v' -> case v' of
-      GetDataUnboundBuffer bufSize io -> BSB.toLazyByteString <$> bsParts bufSize io
+      GetDataUnboundBuffer cdesc bufSize io -> BSB.toLazyByteString <$> bsParts cdesc bufSize io
 
 instance FromField Image where
   type FieldBufferType Image = CBinary
@@ -806,15 +803,15 @@ instance FromField T.Text where
   type FieldBufferType T.Text = CText
   fromField v = case getColBuffer v of
     Left v' -> case v' of
-      (BindColBuffer byteCountFP bytesFP) -> fmap TE.decodeUtf16LE $ do
+      (BindColBuffer _ byteCountFP bytesFP) -> fmap TE.decodeUtf16LE $ do
          byteCount <- peekFP byteCountFP
          s <- withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
          pure s
     Right v' -> case v' of
-      GetDataUnboundBuffer bufSize io -> TE.decodeUtf16LE . LBS.toStrict . BSB.toLazyByteString <$> bsParts bufSize io
+      GetDataUnboundBuffer cdesc bufSize io -> TE.decodeUtf16LE . LBS.toStrict . BSB.toLazyByteString <$> bsParts cdesc bufSize io
 
-bsParts :: CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> IO BSB.Builder
-bsParts bufSize io = do
+bsParts :: ColDescriptor -> CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> IO BSB.Builder
+bsParts cdesc bufSize io = do
   (fetch, binFP, lenOrIndFP) <- io
   go lenOrIndFP binFP fetch mempty
 
@@ -826,14 +823,14 @@ bsParts bufSize io = do
                 case ret of
                   SQL_SUCCESS -> do
                     case fromIntegral lenOrInd of
-                      SQL_NULL_DATA -> throwIO SQLNullDataException
-                      SQL_NO_TOTAL -> throwIO SQLNoTotalException
+                      SQL_NULL_DATA -> throwIO (SQLNullDataException cdesc)
+                      SQL_NO_TOTAL -> throwIO (SQLNoTotalException cdesc)
                       size -> do
                         a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral size)
                         pure (acc <> BSB.byteString a)
                   SQL_SUCCESS_WITH_INFO -> do
                     case fromIntegral lenOrInd of
-                      SQL_NULL_DATA -> throwIO SQLNullDataException
+                      SQL_NULL_DATA -> throwIO (SQLNullDataException cdesc)
                       SQL_NO_TOTAL -> do
                         a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral bufSize)
                         loop0 (acc <> BSB.byteString a)
@@ -844,24 +841,8 @@ bsParts bufSize io = do
                         a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral size)
                         loop0 (acc <> BSB.byteString a)                                     
                   SQL_NO_DATA -> pure acc
-                  _ -> error "Panic: impossible case @fromField ASCIIText"                  
+                  _ -> error "Panic: impossible case @bsParts"                  
   
-{-
-instance FromField Money where
-  type FieldBufferType Money = CBindCol (CDecimal CChar)
-  fromField = \v -> do
-    bs <- extractWith (castColBufferPtr $ getColBuffer v) $ \bufSize ccharP -> do
-        BS.packCStringLen (ccharP, fromIntegral bufSize)
-    let res = BS8.unpack bs
-    maybe (error $ "Parse failed for Money: " ++ show res)
-          (pure . Money) (readMaybe $ res)
-
-instance FromField SmallMoney where
-  type FieldBufferType SmallMoney = CBindCol (CDecimal CDouble)
-  fromField = \v -> do
-    extractVal (castColBufferPtr (getColBuffer v) :: ColBufferType 'BindCol CDouble) >>= (pure . SmallMoney . fromFloatDigits)
--}
-
 instance FromField Day where
   type FieldBufferType Day = CDate
   fromField =
@@ -913,23 +894,23 @@ instance FromField UUID where
 instance (FromField a, Storable (FieldBufferType a), Typeable a) => FromField (Maybe a) where
   type FieldBufferType (Maybe a) = FieldBufferType a
   fromField v = case getColBuffer v of
-      Left (BindColBuffer fptr _) -> do 
+      Left (BindColBuffer _ fptr _) -> do 
         lengthOrIndicator <- peekFP fptr
         if lengthOrIndicator == fromIntegral SQL_NULL_DATA -- TODO: Only long worked not SQLINTEGER
           then pure Nothing
           else Just <$> (fromField v)
-      Right (GetDataBoundBuffer io) -> do 
+      Right (GetDataBoundBuffer cdesc io) -> do 
         (fp, lenOrIndFP) <- io
         lenOrInd <- peekFP lenOrIndFP
         case lenOrInd == fromIntegral SQL_NULL_DATA of
           True  -> pure Nothing
-          False -> Just <$> fromField (ColBuffer (Right (GetDataBoundBuffer (pure (castForeignPtr fp, lenOrIndFP)))))
-      Right (GetDataUnboundBuffer bufSize io) -> do
+          False -> Just <$> fromField (ColBuffer (Right (GetDataBoundBuffer cdesc (pure (castForeignPtr fp, lenOrIndFP)))))
+      Right (GetDataUnboundBuffer cdesc bufSize io) -> do
         (next, fptr, lenOrIndFP) <- io
         res <- next
         lenOrInd <- peekFP lenOrIndFP
         case lenOrInd == fromIntegral SQL_NULL_DATA of
-          False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer bufSize (go res next fptr lenOrIndFP))))
+          False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer cdesc bufSize (go res next fptr lenOrIndFP))))
           True -> pure Nothing
 
           where go res next fptr lenOrIndFP = do
@@ -973,7 +954,7 @@ instance Show SmallMoney where
 newtype Image = Image { getImage :: LBS.ByteString }
               deriving (Eq, Show)
 
-bindColumnStrategy :: Config -> HSTMT a -> CShort -> IO BindType
+bindColumnStrategy :: QueryConfig -> HSTMT a -> CShort -> IO BindType
 bindColumnStrategy cfg hstmt =
   fmap go . mapM (sqlDescribeCol (getHSTMT hstmt) . fromIntegral) . enumFromTo 1
 
@@ -987,16 +968,3 @@ bindColumnStrategy cfg hstmt =
 
           where unboundedTypes = [ SQL_WLONGVARCHAR, SQL_LONGVARCHAR, SQL_LONGVARBINARY ]
 
-
-
-{-
-
-- segfault issue
-- right associativeness of <>
-- sized variants
-- extractWith errors
-- constraint checks in Database instance turned off. turn it back on
-- CheckCT not necessary to be captured
-
-
--}

@@ -119,7 +119,7 @@ unit_transaction_prim_test = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   execute con "delete from test"
-  sqlSetAutoCommitOff (_hdbc con)
+  setAutoCommitOff (_hdbc con)
   execute con "insert into test (value) values (1)"
   rollback (_hdbc con)
   (vs :: Vector (Identity Int32)) <- query con "select value from test"
@@ -127,7 +127,7 @@ unit_transaction_prim_test = do
   execute con "insert into test (value) values (1)"
   commit (_hdbc con)
   (vs :: Vector (Identity Int32)) <- query con "select value from test"
-  sqlSetAutoCommitOn (_hdbc con)  
+  setAutoCommitOn (_hdbc con)  
   disconnect con
   pure (pure 1) @=? vs
   

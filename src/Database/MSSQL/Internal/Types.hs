@@ -159,28 +159,28 @@ data ConnectInfo = ConnectInfo
   , attrAfter  :: [ConnectAttr 'ConnectAfter]
   }
 
-data Config = Config
-  { boundSizeLimit :: Word
-  , bufferSize :: Word
+data QueryConfig = QueryConfig
+  { boundSizeLimit :: Word    -- ^ Size limit till which SQLBindCol would be used
+  , bufferSize :: Word        -- ^ Buffer size allocated for SQLGetData
   } deriving (Show, Eq)
 
-defConfig :: Config
-defConfig = Config { boundSizeLimit = _64Kb, bufferSize = _64Kb }
+defQueryConfig :: QueryConfig
+defQueryConfig = QueryConfig { boundSizeLimit = _64Kb, bufferSize = _64Kb }
 
 _64Kb :: Word
 _64Kb = 65536
 
-data SQLNullDataException = SQLNullDataException
+data SQLNullDataException = SQLNullDataException { getNullColumnDescription :: ColDescriptor }
                           deriving (Generic, Show)
 
 instance Exception SQLNullDataException
 
-data SQLNoTotalException = SQLNoTotalException
+data SQLNoTotalException = SQLNoTotalException { getNoTotalColumnDescription :: ColDescriptor }
                           deriving (Generic, Show)
 
 instance Exception SQLNoTotalException
 
-data SQLNoDataException = SQLNoDataException
+data SQLNoDataException = SQLNoDataException { getNoDataColumnDescription :: ColDescriptor }
                           deriving (Generic, Show)
 
 instance Exception SQLNoDataException
@@ -206,6 +206,13 @@ instance Show SQLColumnSizeException where
     "Mismatch between expected column size in type and actual column size in database. Expected column size in type is " <>
     show e <> ", but actual column size in database is " <> show a
 
+data SQLTypeMismatchException = SQLTypeMismatchException T.Text
+                              deriving (Generic)
+
+instance Exception SQLTypeMismatchException
+
+instance Show SQLTypeMismatchException where
+  show (SQLTypeMismatchException a) = T.unpack a
 
 data SQLException = SQLException {getSQLErrors :: SQLErrors }
                   deriving (Show, Generic)
@@ -251,9 +258,9 @@ data ColBufferTypeK =
   | GetDataUnbound
   
 data ColBufferType (k :: ColBufferTypeK) t where
-  BindColBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'BindCol t
-  GetDataBoundBuffer :: IO (ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataBound t
-  GetDataUnboundBuffer :: CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataUnbound t
+  BindColBuffer :: ColDescriptor -> ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'BindCol t
+  GetDataBoundBuffer :: ColDescriptor -> IO (ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataBound t
+  GetDataUnboundBuffer :: ColDescriptor -> CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataUnbound t
 
 data ColBufferSizeK =
     Unbounded
