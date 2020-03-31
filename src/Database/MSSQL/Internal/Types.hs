@@ -14,6 +14,7 @@
 {-# LANGUAGE QuasiQuotes                #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE ViewPatterns               #-}
+{-# LANGUAGE ExistentialQuantification  #-}
 
 module Database.MSSQL.Internal.Types where
 
@@ -35,7 +36,6 @@ import qualified Language.C.Inline as C
 import Database.MSSQL.Internal.SQLTypes
 import Database.MSSQL.Internal.Ctx
 import Data.UUID.Types (UUID)
-import Data.Typeable
 
 data SQLHENV
 data SQLHDBC
@@ -170,6 +170,22 @@ defConfig = Config { boundSizeLimit = _64Kb, bufferSize = _64Kb }
 _64Kb :: Word
 _64Kb = 65536
 
+data SQLNullDataException = SQLNullDataException
+                          deriving (Generic, Show)
+
+instance Exception SQLNullDataException
+
+data SQLNoTotalException = SQLNoTotalException
+                          deriving (Generic, Show)
+
+instance Exception SQLNoTotalException
+
+data SQLNoDataException = SQLNoDataException
+                          deriving (Generic, Show)
+
+instance Exception SQLNoDataException
+
+
 data SQLNumResultColsException = SQLNumResultColsException { expected :: CShort, actual :: CShort }
                               deriving (Generic)
 
@@ -237,7 +253,7 @@ data ColBufferTypeK =
 data ColBufferType (k :: ColBufferTypeK) t where
   BindColBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'BindCol t
   GetDataBoundBuffer :: IO (ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataBound t
-  GetDataUnboundBuffer :: (forall a. Typeable a => a -> (CLong -> CLong -> Ptr t -> a -> IO a) -> IO a) -> ColBufferType 'GetDataUnbound t
+  GetDataUnboundBuffer :: CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> ColBufferType 'GetDataUnbound t
 
 data ColBufferSizeK =
     Unbounded

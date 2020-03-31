@@ -68,7 +68,7 @@ import Data.Scientific
 import Data.Typeable
 import GHC.TypeLits
 import Data.Char (isAscii)
-import Control.Exception (bracket, onException, finally)
+import Control.Exception (bracket, onException, finally, throwIO)
 import qualified Foreign.C.String as F
 import Database.MSSQL.Internal.SQLBindCol
 import qualified Data.Text.Encoding as TE
@@ -443,18 +443,20 @@ sqlGetConnectAttr hdbcp attr vptr len outLenPtr =
 
   
 extractVal :: Storable t => ColBufferType 'BindCol t -> IO t
-extractVal cbuff = case cbuff of
-  BindColBuffer _ cbuffPtr -> withForeignPtr cbuffPtr peek
+extractVal = extractWith (\_ -> peek)
 
 extractWith ::
   Storable t =>
+  (CLong -> Ptr t -> IO b) ->  
   ColBufferType 'BindCol t ->
-  (CLong -> Ptr t -> IO b) ->
   IO b
-extractWith cbuff f = case cbuff of
-  BindColBuffer bufSizeFP cbuffPtr -> do
-    bufSize <- peekFP bufSizeFP
-    withForeignPtr cbuffPtr (f bufSize)
+extractWith f cbuff = case cbuff of
+  BindColBuffer lenOrIndFP cbuffPtr -> do
+    lenOrInd <- peekFP lenOrIndFP
+    case fromIntegral lenOrInd of
+      SQL_NULL_DATA -> throwIO SQLNullDataException
+      SQL_NO_TOTAL -> throwIO SQLNoTotalException
+      _ -> withForeignPtr cbuffPtr (f lenOrInd)
 
 castColBufferPtr ::
   (Coercible t1 t2) =>
@@ -463,9 +465,8 @@ castColBufferPtr ::
 castColBufferPtr cbuff = case cbuff of
   BindColBuffer lenOrIndFP cbuffPtr ->
     BindColBuffer lenOrIndFP (castForeignPtr cbuffPtr)
-  GetDataUnboundBuffer k ->
-    GetDataUnboundBuffer (\a accf -> k a $
-                       \bf l -> accf bf l . castPtr)
+  GetDataUnboundBuffer bufSize k ->
+    GetDataUnboundBuffer bufSize (coerce k)
   GetDataBoundBuffer act ->
     GetDataBoundBuffer $ do
       (fptr, lenOrInd) <- act
@@ -476,11 +477,14 @@ boundWith ::
   (CLong -> Ptr t -> IO a)       ->
   IO a
 boundWith (GetDataBoundBuffer io) f = do
-  (fptr, fstrOrIndPtr) <- io
+  (fptr, lenOrIndFP) <- io
   withForeignPtr fptr $ \ptr ->
-    withForeignPtr fstrOrIndPtr $ \strOrIndPtr -> do
-      strOrInd <- peek strOrIndPtr
-      f strOrInd ptr
+    withForeignPtr lenOrIndFP $ \lenOrIndP -> do
+      lenOrInd <- peek lenOrIndP
+      case fromIntegral lenOrInd of
+        SQL_NULL_DATA -> throwIO SQLNullDataException
+        SQL_NO_TOTAL -> throwIO SQLNoTotalException
+        _ -> f lenOrInd ptr
 
 newtype ASCIIText = ASCIIText { getASCIIText :: T.Text }
                   deriving (Show, Eq, Generic)
@@ -688,7 +692,7 @@ instance FromField Int64 where
 
 instance FromField Word8 where
   type FieldBufferType Word8 = CUTinyInt
-  fromField =  
+  fromField =
     either (\v -> extractVal v >>= pure . fromIntegral)
            (\v -> boundWith v (\_ -> fmap fromIntegral . peek))
     .
@@ -742,15 +746,33 @@ instance FromField ASCIIText where
          charCount <- peekFP charCountFP
          a <- withForeignPtr textFP $ \ccharP -> F.peekCStringLen (coerce ccharP, fromIntegral charCount)
          pure (ASCIIText (T.pack a))
-    Right v' -> getDataTxt v'
+    Right v' -> case v' of
+      GetDataUnboundBuffer _ io -> ASCIIText <$> getDataTxt io
 
-    where getDataTxt v' = do
-            bsb <- unboundWith v' mempty $
-              \_bufSize _lenOrInd ccharP acc -> do
-                a <- F.peekCString ccharP
-                pure (acc <> T.pack a)
-            pure (ASCIIText bsb)
+    where getDataTxt io = do
+            (fetch, ccharFP, lenOrIndFP) <- io
+            go lenOrIndFP ccharFP fetch mempty
 
+          go lenOrIndFP ccharFP fetch = loop0
+            where loop0 acc = do
+                      ret <- fetch
+                      lenOrInd <- peekFP lenOrIndFP
+                      case ret of
+                        SQL_SUCCESS -> do
+                          case fromIntegral lenOrInd of
+                            SQL_NULL_DATA -> throwIO SQLNullDataException
+                            _ -> do
+                              a <- withForeignPtr ccharFP F.peekCString
+                              pure (acc <> T.pack a)
+                        SQL_SUCCESS_WITH_INFO -> do
+                          case fromIntegral lenOrInd of
+                            SQL_NULL_DATA -> throwIO SQLNullDataException
+                            _ -> do                          
+                              a <- withForeignPtr ccharFP F.peekCString
+                              loop0 (acc <> T.pack a)                         
+                        SQL_NO_DATA -> pure acc
+                        _ -> error "Panic: impossible case @fromField ASCIIText"
+            
 instance FromField ByteString where
   type FieldBufferType ByteString = CBinary
   fromField v = case getColBuffer v of
@@ -762,19 +784,9 @@ instance FromField ByteString where
                                          pure bs
                                             )
          
-    Right v' -> getDataBs v'
+    Right v' -> case v' of
+      GetDataUnboundBuffer bufSize io -> LBS.toStrict . BSB.toLazyByteString <$> bsParts bufSize io
 
-    where getDataBs val = do
-            bsb <- unboundWith val mempty $
-              \bufSize lenOrInd ccharP acc -> do
-                let actBufSize = case fromIntegral lenOrInd of
-                                   SQL_NO_TOTAL -> bufSize
-                                   i | i > fromIntegral bufSize -> bufSize
-                                   len -> fromIntegral len
-                a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
-                pure (acc <> BSB.byteString a)
-            pure (LBS.toStrict (BSB.toLazyByteString bsb))
-  
 instance FromField LBS.ByteString where
   type FieldBufferType LBS.ByteString = CBinary
   fromField v = case getColBuffer v of
@@ -782,45 +794,57 @@ instance FromField LBS.ByteString where
       (BindColBuffer byteCountFP bytesFP) -> do
          byteCount <- peekFP byteCountFP
          withForeignPtr bytesFP $ \bytesP -> (LBS.fromStrict <$> (BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
-    Right v' -> getDataBs v'
 
-    where getDataBs val = do
-            bsb <- unboundWith val mempty $
-              \bufSize lenOrInd ccharP acc -> do
-                let actBufSize = case fromIntegral lenOrInd of
-                                   SQL_NO_TOTAL -> bufSize
-                                   i | i > fromIntegral bufSize -> bufSize
-                                   len -> fromIntegral len
-                a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
-                pure (acc <> BSB.byteString a)
-            pure (BSB.toLazyByteString bsb)
-            
+    Right v' -> case v' of
+      GetDataUnboundBuffer bufSize io -> BSB.toLazyByteString <$> bsParts bufSize io
+
 instance FromField Image where
   type FieldBufferType Image = CBinary
   fromField = fmap Image . fromField
 
 instance FromField T.Text where
   type FieldBufferType T.Text = CText
-  fromField v = fmap TE.decodeUtf16LE $ case getColBuffer v of
+  fromField v = case getColBuffer v of
     Left v' -> case v' of
-      (BindColBuffer byteCountFP bytesFP) -> do
+      (BindColBuffer byteCountFP bytesFP) -> fmap TE.decodeUtf16LE $ do
          byteCount <- peekFP byteCountFP
          s <- withForeignPtr bytesFP $ \bytesP -> ((BS.packCStringLen (coerce bytesP, fromIntegral byteCount)))
          pure s
-         
-    Right v' -> getDataBs v'
+    Right v' -> case v' of
+      GetDataUnboundBuffer bufSize io -> TE.decodeUtf16LE . LBS.toStrict . BSB.toLazyByteString <$> bsParts bufSize io
 
-    where getDataBs val = do
-            bsb <- unboundWith val mempty $
-              \bufSize lenOrInd ccharP acc -> do 
-                let actBufSize = case fromIntegral lenOrInd of
-                                   SQL_NO_TOTAL -> bufSize
-                                   i | i > fromIntegral bufSize -> bufSize
-                                   i | i < 0 -> error $ "Panic: die: " ++ show i
-                                   len -> fromIntegral len
-                a <- BS.packCStringLen (coerce ccharP, fromIntegral actBufSize)
-                pure (acc <> BSB.byteString a)
-            pure (LBS.toStrict (BSB.toLazyByteString bsb))
+bsParts :: CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> IO BSB.Builder
+bsParts bufSize io = do
+  (fetch, binFP, lenOrIndFP) <- io
+  go lenOrIndFP binFP fetch mempty
+
+  where 
+    go lenOrIndFP binFP fetch = loop0
+      where loop0 acc = do
+                ret <- fetch
+                lenOrInd <- peekFP lenOrIndFP
+                case ret of
+                  SQL_SUCCESS -> do
+                    case fromIntegral lenOrInd of
+                      SQL_NULL_DATA -> throwIO SQLNullDataException
+                      SQL_NO_TOTAL -> throwIO SQLNoTotalException
+                      size -> do
+                        a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral size)
+                        pure (acc <> BSB.byteString a)
+                  SQL_SUCCESS_WITH_INFO -> do
+                    case fromIntegral lenOrInd of
+                      SQL_NULL_DATA -> throwIO SQLNullDataException
+                      SQL_NO_TOTAL -> do
+                        a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral bufSize)
+                        loop0 (acc <> BSB.byteString a)
+                      size | size > fromIntegral bufSize -> do
+                        a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral bufSize)
+                        loop0 (acc <> BSB.byteString a)
+                           | otherwise -> do
+                        a <- withForeignPtr binFP $ \binP -> BS.packCStringLen (coerce binP, fromIntegral size)
+                        loop0 (acc <> BSB.byteString a)                                     
+                  SQL_NO_DATA -> pure acc
+                  _ -> error "Panic: impossible case @fromField ASCIIText"                  
   
 {-
 instance FromField Money where
@@ -840,7 +864,7 @@ instance FromField SmallMoney where
 
 instance FromField Day where
   type FieldBufferType Day = CDate
-  fromField = 
+  fromField =
     either (\v -> extractVal v >>= (pure . getDate . coerce))
            (\v -> boundWith v (\_ -> fmap (getDate . coerce) . peek))
     .
@@ -849,7 +873,7 @@ instance FromField Day where
 instance FromField TimeOfDay where
   type FieldBufferType TimeOfDay = CTimeOfDay
   fromField =
-    either (\v -> extractWith v $ \_ v' -> do
+    either (\v -> flip extractWith v $ \_ v' -> do
                v'' <- peek (coerce v')
                pure $ getTimeOfDay v''
            )
@@ -899,17 +923,23 @@ instance (FromField a, Storable (FieldBufferType a), Typeable a) => FromField (M
         lenOrInd <- peekFP lenOrIndFP
         case lenOrInd == fromIntegral SQL_NULL_DATA of
           True  -> pure Nothing
-          False -> Just <$> fromField (ColBuffer (Right (GetDataBoundBuffer (pure (castForeignPtr fp, lenOrIndFP)))))       
-      Right x@(GetDataUnboundBuffer _) -> do
-        unboundWith x Nothing $ \bufSize lenOrInd ptr a -> do
-          case lenOrInd == fromIntegral SQL_NULL_DATA of
-            True -> pure Nothing 
-            False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer (\a' f ->
-                                                                                   f bufSize lenOrInd ptr (maybe a' (unifyUnsafeCoerce a') a)))))
+          False -> Just <$> fromField (ColBuffer (Right (GetDataBoundBuffer (pure (castForeignPtr fp, lenOrIndFP)))))
+      Right (GetDataUnboundBuffer bufSize io) -> do
+        (next, fptr, lenOrIndFP) <- io
+        res <- next
+        lenOrInd <- peekFP lenOrIndFP
+        case lenOrInd == fromIntegral SQL_NULL_DATA of
+          False -> Just <$> fromField (ColBuffer (Right (GetDataUnboundBuffer bufSize (go res next fptr lenOrIndFP))))
+          True -> pure Nothing
 
-          where
-            unifyUnsafeCoerce :: forall a1 b1. a1 -> b1 -> a1
-            unifyUnsafeCoerce _ _b = error "Panic: Multiple runs for Unbounded Maybe failed"
+          where go res next fptr lenOrIndFP = do
+                  ref <- newIORef False
+                  pure (next' ref, fptr, lenOrIndFP)
+
+                  where next' ref = do
+                          b <- readIORef ref
+                          if b then next else atomicWriteIORef ref True >> pure res
+            
       _ -> error "Panic: impossible case @fromField"
   
 instance FromField a => FromField (Identity a) where

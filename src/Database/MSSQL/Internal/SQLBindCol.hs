@@ -206,12 +206,11 @@ instance SQLBindCol CBinary where
              binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
-                 cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)                        
+                 cbuf = getDataUnboundBuffer bufSize (fetchBytes hstmtP binFP lenOrIndFP bufSize cpos)
              pure cbuf
 
-           fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f = go           
-             where go acc = do
+           fetchBytes hstmtP binFP lenOrIndFP bufSize cpos = pure (go, coerce binFP, lenOrIndFP)
+             where go = do
                      ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
                       [C.block| int {
                         SQLRETURN ret = 0;
@@ -220,12 +219,9 @@ instance SQLBindCol CBinary where
                         ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQLCHAR* binP), $(SQLLEN bufSize), lenOrInd);
                         return ret;
                       }|]
-                     case isSuccessful ret of
-                       True -> do
-                           lengthOrInd <- peekFP lenOrIndFP
-                           acc' <- withForeignPtr binFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
-                           go acc'
-                       False -> pure acc
+                     case ret `elem` [ SQL_SUCCESS, SQL_SUCCESS_WITH_INFO, SQL_NO_DATA ] of
+                       True -> pure ret
+                       False -> getErrors ret (SQLSTMTRef hstmtP) >>= throwSQLException
 
 newtype CText = CText { getCText :: CBinary }
                 deriving (Show, Eq, Ord, Enum, Bounded, Num, Integral, Real, Storable)
@@ -258,12 +254,11 @@ instance SQLBindCol CText where
              binFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
-                 cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f acc)                        
+                 cbuf = getDataUnboundBuffer bufSize (fetchBytes hstmtP binFP lenOrIndFP bufSize cpos)
              pure cbuf
 
-           fetchBytes hstmtP binFP lenOrIndFP bufSize cpos f = go           
-             where go acc = do
+           fetchBytes hstmtP binFP lenOrIndFP bufSize cpos = pure (go, coerce binFP, lenOrIndFP)
+             where go = do
                      ret <- fmap ResIndicator $ withForeignPtr binFP $ \binP -> do
                       [C.block| int {
                         SQLRETURN ret = 0;
@@ -272,13 +267,9 @@ instance SQLBindCol CText where
                         ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_BINARY, $(SQLCHAR* binP), $(SQLLEN bufSize), lenOrInd);
                         return ret;
                       }|]
-                     case isSuccessful ret of
-                       True -> do
-                           lengthOrInd <- peekFP lenOrIndFP
-                           acc' <- withForeignPtr binFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
-                           
-                           go acc'
-                       False -> pure acc
+                     case ret `elem` [ SQL_SUCCESS, SQL_SUCCESS_WITH_INFO, SQL_NO_DATA ] of
+                       True -> pure ret
+                       False -> getErrors ret (SQLSTMTRef hstmtP) >>= throwSQLException
 
 instance SQLBindCol CChar where
   type ColBufferSize CChar = 'Unbounded  
@@ -309,13 +300,11 @@ instance SQLBindCol CChar where
              chrFP <- guardedMallocForeignPtrBytes (fromIntegral bufSize)
              lenOrIndFP :: ForeignPtr CLong <- mallocForeignPtr
              let cpos = colPosition cdesc
-                 cbuf = getDataUnboundBuffer (\acc f ->
-                                               fetchChars hstmtP chrFP lenOrIndFP bufSize cpos f acc)                        
+                 cbuf = getDataUnboundBuffer bufSize (fetchChars hstmtP chrFP lenOrIndFP bufSize cpos)
              pure cbuf
 
-           fetchChars hstmtP chrFP lenOrIndFP bufSize cpos f = go
-           
-             where go acc = do
+           fetchChars hstmtP chrFP lenOrIndFP bufSize cpos = pure (go, chrFP, lenOrIndFP)           
+             where go = do
                      ret <- fmap ResIndicator $ withForeignPtr chrFP $ \chrP -> do
                       [C.block| int {
                         SQLRETURN ret = 0;
@@ -324,13 +313,10 @@ instance SQLBindCol CChar where
                         ret = SQLGetData(hstmt, $(SQLUSMALLINT cpos), SQL_C_CHAR, $(SQLCHAR* chrP), $(SQLLEN bufSize), lenOrInd);
                         return ret;
                       }|]
-                     case isSuccessful ret of
-                       True -> do
-                           lengthOrInd <- peekFP lenOrIndFP
-                           acc' <- withForeignPtr chrFP $ \tptr -> f bufSize lengthOrInd (coerce tptr) acc
-                           go acc'
-                       False -> pure acc
-
+                     case ret `elem` [ SQL_SUCCESS, SQL_SUCCESS_WITH_INFO, SQL_NO_DATA ] of
+                       True -> pure ret
+                       False -> getErrors ret (SQLSTMTRef hstmtP) >>= throwSQLException
+                      
 {-
 {-
 newtype CDecimal a = CDecimal a
@@ -919,21 +905,12 @@ returnWithRetCode ret ref a =
     True  -> pure a
     False -> getErrors ret ref >>= throwSQLException
 
-unboundWith :: 
-  (Storable t, Typeable a) =>
-  ColBufferType 'GetDataUnbound t ->
-  a ->
-  (CLong -> CLong -> Ptr t -> a -> IO a) ->
-  IO a
-unboundWith cbuff a f =
-  case cbuff of
-    GetDataUnboundBuffer k -> k a f
-
 bindColBuffer :: ForeignPtr CLong -> ForeignPtr t -> ColBufferType 'BindCol t
 bindColBuffer = BindColBuffer
 
 getDataUnboundBuffer ::
-  (forall a. a -> (CLong -> CLong -> Ptr t -> a -> IO a) -> IO a) ->
+  CLong ->
+  IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) ->
   ColBufferType 'GetDataUnbound t
 getDataUnboundBuffer = GetDataUnboundBuffer
 
