@@ -176,7 +176,7 @@ unit_maybe = do
   let conInfo = testConnectInfo
   con <- connect conInfo
   print "maybe test"
-  res <- query con "select CAST (null AS BIGINT)" :: IO (Vector (Identity (Maybe Int)))
+  res <- query con "select CAST (null AS BIGINT) as foo" :: IO (Vector (Identity (Maybe Int)))
   print res
   pure (pure Nothing) @=? res
   disconnect con

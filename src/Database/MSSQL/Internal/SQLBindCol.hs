@@ -789,11 +789,11 @@ getCurrentColDescriptor hstmt = do
 sqlMapping :: HM.HashMap TypeRep [SQLType]
 sqlMapping =
   HM.fromList
-  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
+  [ (typeOf (undefined :: CChar)     , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_DECIMAL])
   , (typeOf (undefined :: CUChar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR])
   , (typeOf (undefined :: CWchar)    , [SQL_VARCHAR, SQL_LONGVARCHAR, SQL_CHAR, SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_WVARCHAR])
   , (typeOf (undefined :: CBinary)   , [SQL_LONGVARBINARY, SQL_VARBINARY])
-  , (typeOf (undefined :: CText)     , [SQL_WLONGVARCHAR, SQL_VARCHAR, SQL_WVARCHAR, SQL_LONGVARCHAR])    
+  , (typeOf (undefined :: CText)     , [SQL_WLONGVARCHAR, SQL_WVARCHAR ])    
   , (typeOf (undefined :: CUTinyInt) , [SQL_TINYINT])
   , (typeOf (undefined :: CTinyInt)  , [SQL_TINYINT])
   , (typeOf (undefined :: CLong)     , [SQL_INTEGER])
