@@ -207,29 +207,17 @@ disconnect con = do
     hdbc = _hdbc con
     henv = _henv con
 
-
-sqldirect :: Connection -> Ptr SQLHSTMT -> T.Text -> IO CShort
-sqldirect _con hstmt sql = do
+sqlExecDirect :: Ptr SQLHSTMT -> T.Text -> IO ResIndicator
+sqlExecDirect hstmtP sql = do
   (queryWStr, queryLen) <- fmap (fmap fromIntegral) $ asForeignPtr $ sql
-  numResultColsFP :: ForeignPtr CShort <- mallocForeignPtr
 
-  ret <- ResIndicator <$> [C.block| int {
+  ResIndicator <$> [C.block| int {
     SQLRETURN ret = 0;
-    SQLHSTMT hstmt = $(SQLHSTMT hstmt);
-    SQLSMALLINT* numColumnPtr = $fptr-ptr:(SQLSMALLINT* numResultColsFP);
-
+    SQLHSTMT hstmt = $(SQLHSTMT hstmtP);
     ret = SQLExecDirectW(hstmt, $fptr-ptr:(SQLWCHAR* queryWStr), $(int queryLen));
-    if (!SQL_SUCCEEDED(ret)) return ret;
-
-    ret = SQLNumResultCols(hstmt, numColumnPtr);
-
     return ret;
     }|]
   
-  case ret of
-    SQL_SUCCESS -> peekFP numResultColsFP
-    SQL_NO_DATA -> peekFP numResultColsFP
-    _           -> getErrors ret (SQLSTMTRef hstmt) >>= throwSQLException
         
 allocHSTMT :: Connection -> IO (HSTMT a)
 allocHSTMT con = do
@@ -274,6 +262,16 @@ withHSTMT con act = do
   bracket (allocHSTMT con)
           releaseHSTMT
           act
+
+sqlNumResultCols :: Ptr CShort -> Ptr SQLHSTMT-> IO ResIndicator
+sqlNumResultCols numResultColsP hstmt = do
+  ResIndicator <$> [C.block| int {
+    SQLRETURN ret = 0;
+    SQLHSTMT hstmt = $(SQLHSTMT hstmt);
+    SQLSMALLINT* numColumnPtr = $(SQLSMALLINT* numResultColsP);
+    ret = SQLNumResultCols(hstmt, numColumnPtr);
+    return ret;
+    }|]
 
 sqlFetch :: HSTMT a -> IO ResIndicator
 sqlFetch stmt = do
@@ -326,6 +324,15 @@ sqlGetInfo con _  = do
         (Right . T.pack . show) <$> peek infoP
   where
     hdbc = _hdbc con
+
+sqlMoreResults :: Ptr SQLHSTMT -> IO ResIndicator
+sqlMoreResults hstmt = 
+    ResIndicator <$> [C.block| SQLRETURN {
+                        SQLRETURN ret = 0;  
+                        SQLHSTMT hstmt = $(SQLHSTMT hstmt);
+                        ret = SQLMoreResults(hstmt);
+                        return ret;
+                     }|]
 
 withTransaction :: Connection -> IO a -> IO a
 withTransaction (Connection { _hdbc = hdbcp }) io = do
@@ -551,6 +558,10 @@ data FieldDescriptor t = FieldDescriptor
 initColPos :: IO ColPos
 initColPos = ColPos <$> newIORef 1
 
+reinitColPos :: ColPos -> IO ()
+reinitColPos (ColPos ref) =
+  atomicWriteIORef ref 1
+
 nextColPos :: HSTMT a -> IO ()
 nextColPos hstmt = do
   let (ColPos wref) = colPos hstmt
@@ -567,25 +578,51 @@ query :: forall r.(FromRow r) => Connection -> Query -> IO (Vector r)
 query = queryWith defQueryConfig fromRow 
 
 queryWith :: forall r.QueryConfig -> RowParser r -> Connection -> Query -> IO (Vector r)
-queryWith cfg (RowParser colBuf rowPFun) con q = do
-  withHSTMT con $ \hstmt -> do
-    nrcs <- sqldirect con (getHSTMT hstmt) q
-    bt <- bindColumnStrategy cfg hstmt nrcs
-    colBuffer <- colBuf bt cfg ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
-    (rows, ret) <- fetchRows hstmt (rowPFun colBuffer)
-    case ret of
-          SQL_SUCCESS           -> pure rows
-          SQL_SUCCESS_WITH_INFO -> pure rows
-          SQL_NO_DATA           -> pure rows
-          _                     -> do
-            errs <- getErrors ret (SQLSTMTRef $ getHSTMT hstmt)
-            throwSQLException errs
+queryWith cfg rowP con q = do
+  exec con q go
+
+  where go hstmt res = do
+          case res of
+            SQL_SUCCESS -> do
+              fptrCols :: ForeignPtr CShort <- mallocForeignPtr                
+              resNumResCols <- withForeignPtr fptrCols $ \ptrCols -> sqlNumResultCols ptrCols (getHSTMT hstmt)
+              case isSuccessful resNumResCols of
+                True -> do
+                  nrcs <- peekFP fptrCols
+                  fetch cfg rowP hstmt nrcs
+                False -> do                
+                  errs <- getErrors resNumResCols (SQLSTMTRef $ getHSTMT hstmt)
+                  throwSQLException errs                    
+            _ -> do
+              errs <- getErrors res (SQLSTMTRef $ getHSTMT hstmt)
+              throwSQLException errs                    
+
+fetch :: QueryConfig -> RowParser a -> HSTMT (Vector a) -> CShort -> IO (Vector a)
+fetch cfg (RowParser colBuf rowPFun) hstmt nrcs = do
+   bt <- bindColumnStrategy cfg hstmt nrcs
+   reinitColPos (colPos hstmt)
+   colBuffer <- colBuf bt cfg ((coerce hstmt { numResultCols = nrcs }) :: HSTMT ())
+   (rows, ret) <- fetchRows hstmt (rowPFun colBuffer)
+   case ret of
+         SQL_SUCCESS           -> pure rows
+         SQL_SUCCESS_WITH_INFO -> pure rows
+         SQL_NO_DATA           -> pure rows
+         _                     -> do
+           errs <- getErrors ret (SQLSTMTRef $ getHSTMT hstmt)
+           throwSQLException errs
 
 execute :: Connection -> Query -> IO Int64
-execute con q = do
+execute con q =
+  exec con q $ \hstmt res -> case res of
+                               SQL_SUCCESS -> sqlRowCount hstmt
+                               SQL_NO_DATA -> pure 0
+                               _           -> getErrors res (SQLSTMTRef (getHSTMT hstmt)) >>= throwSQLException
+
+exec :: Connection -> Query -> (HSTMT a -> ResIndicator -> IO a) -> IO a
+exec con q f = do
   withHSTMT con $ \hstmt -> do
-    _ <- sqldirect con (getHSTMT hstmt) q
-    sqlRowCount hstmt
+    res <- sqlExecDirect (getHSTMT hstmt) q
+    f hstmt res
   
 data RowParser t =
   forall rowbuff.
@@ -747,12 +784,12 @@ instance FromField ASCIIText where
       GetDataUnboundBuffer cdesc _ io -> ASCIIText <$> getDataTxt cdesc io
 
     where getDataTxt cdesc io = do
-            (fetch, ccharFP, lenOrIndFP) <- io
-            go cdesc lenOrIndFP ccharFP fetch mempty
+            (fetchAct, ccharFP, lenOrIndFP) <- io
+            go cdesc lenOrIndFP ccharFP fetchAct mempty
 
-          go cdesc lenOrIndFP ccharFP fetch = loop0
+          go cdesc lenOrIndFP ccharFP fetchAct = loop0
             where loop0 acc = do
-                      ret <- fetch
+                      ret <- fetchAct
                       lenOrInd <- peekFP lenOrIndFP
                       case ret of
                         SQL_SUCCESS -> do
@@ -812,13 +849,13 @@ instance FromField T.Text where
 
 bsParts :: ColDescriptor -> CLong -> IO (IO ResIndicator, ForeignPtr t, ForeignPtr CLong) -> IO BSB.Builder
 bsParts cdesc bufSize io = do
-  (fetch, binFP, lenOrIndFP) <- io
-  go lenOrIndFP binFP fetch mempty
+  (fetchAct, binFP, lenOrIndFP) <- io
+  go lenOrIndFP binFP fetchAct mempty
 
   where 
-    go lenOrIndFP binFP fetch = loop0
+    go lenOrIndFP binFP fetchAct = loop0
       where loop0 acc = do
-                ret <- fetch
+                ret <- fetchAct
                 lenOrInd <- peekFP lenOrIndFP
                 case ret of
                   SQL_SUCCESS -> do
@@ -968,3 +1005,47 @@ bindColumnStrategy cfg hstmt =
 
           where unboundedTypes = [ SQL_WLONGVARCHAR, SQL_LONGVARCHAR, SQL_LONGVARBINARY ]
 
+
+queryMany :: (ResultSets r) => Connection -> Query -> IO r
+queryMany con q = do
+  fptrCols :: ForeignPtr CShort <- mallocForeignPtr  
+  exec con q $ \hstmt res -> resultSets hstmt res fptrCols
+
+class ResultSets a where
+  resultSets :: HSTMT a -> ResIndicator -> ForeignPtr CShort -> IO a
+
+instance ResultSets () where
+  resultSets _ _ _ = pure ()
+
+instance (FromRow a, Typeable a) => ResultSets (Identity (Vector a)) where
+  resultSets hstmt res fptrCols = do
+    (xs, _) <- resultSets (coerce hstmt :: HSTMT (Vector a, ())) res fptrCols
+    pure (Identity xs)
+
+instance (ResultSets b, FromRow a, Typeable a) => ResultSets (Vector a, b) where
+  resultSets =
+    go
+
+    where go hstmt res fptrCols =
+            case res == SQL_SUCCESS || res == SQL_NO_DATA of
+              False -> throwIO SQLResultSetException
+              True -> do
+                resNumResCols <- withForeignPtr fptrCols $ \ptrCol -> sqlNumResultCols ptrCol (getHSTMT hstmt)
+                case isSuccessful resNumResCols of
+                  True -> do
+                    colCount <- peekFP fptrCols
+                    case colCount > 0 of
+                      True -> do
+                        putStrLn $ "ColCount: " ++ show colCount ++ ", " ++ show (typeOf (undefined :: a))
+                        vs <- fetch defQueryConfig fromRow (coerce hstmt :: HSTMT (Vector a)) colCount
+                        nextRes <- sqlMoreResults (getHSTMT hstmt)
+                        putStrLn "Recursing"
+                        resSet <- resultSets (coerce hstmt :: HSTMT b) nextRes fptrCols
+                        pure (vs, resSet)
+                      False -> do
+                        nextRes <- sqlMoreResults (getHSTMT hstmt)
+                        go hstmt nextRes fptrCols
+                  False -> do
+                    errs <- getErrors resNumResCols (SQLSTMTRef $ getHSTMT hstmt)
+                    throwSQLException errs                    
+  

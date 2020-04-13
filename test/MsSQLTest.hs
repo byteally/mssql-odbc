@@ -222,9 +222,20 @@ unit_text = do
   res1 @=? pure (pure "ABCDEFGHIJKLMNOP")
   res1 <- query con "select CAST (N'large world of text which is like really huge' AS NVARCHAR(50))" :: IO (Vector (Identity Text))
   res1 @=? pure (pure "large world of text which is like really huge")
+
+  res1 <- queryMany con "EXEC ChinookSP1"
+  print (res1 :: (Identity (Vector Triple)))
+
+  res1 <- queryMany con "EXEC ChinookSP2"
+  print (res1 :: (Vector Triple, (Vector (Identity Text), ())))
   
   disconnect con
   pure ()
+
+data Triple = Triple Int32 Text Int32
+         deriving (Generic, Show)
+
+instance FromRow Triple
 
 unit_regression_text :: IO ()
 unit_regression_text = do

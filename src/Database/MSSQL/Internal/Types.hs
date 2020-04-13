@@ -185,6 +185,10 @@ data SQLNoDataException = SQLNoDataException { getNoDataColumnDescription :: Col
 
 instance Exception SQLNoDataException
 
+data SQLResultSetException = SQLResultSetException
+                              deriving (Generic, Show)
+
+instance Exception SQLResultSetException
 
 data SQLNumResultColsException = SQLNumResultColsException { expected :: CShort, actual :: CShort }
                               deriving (Generic)
