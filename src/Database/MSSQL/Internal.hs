@@ -1036,10 +1036,8 @@ instance (ResultSets b, FromRow a, Typeable a) => ResultSets (Vector a, b) where
                     colCount <- peekFP fptrCols
                     case colCount > 0 of
                       True -> do
-                        putStrLn $ "ColCount: " ++ show colCount ++ ", " ++ show (typeOf (undefined :: a))
                         vs <- fetch defQueryConfig fromRow (coerce hstmt :: HSTMT (Vector a)) colCount
                         nextRes <- sqlMoreResults (getHSTMT hstmt)
-                        putStrLn "Recursing"
                         resSet <- resultSets (coerce hstmt :: HSTMT b) nextRes fptrCols
                         pure (vs, resSet)
                       False -> do
