@@ -10,6 +10,7 @@
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE FlexibleContexts           #-}
 
 module Database.MSSQL.Internal.SQLBindCol
        ( CUTinyInt (..)
