@@ -5,3 +5,4 @@ module Database.MSSQL
 
 import Database.MSSQL.Internal
 import Database.MSSQL.Internal.SQLTypes
+import Database.MSSQL.Internal.Types (defQueryConfig)
