@@ -30,46 +30,47 @@ module Database.MSSQL.Internal
   , module Database.MSSQL.Internal
   ) where
 
-import Database.MSSQL.Internal.ConnectAttribute
-import Database.MSSQL.Internal.Types
+import           Database.MSSQL.Internal.ConnectAttribute
+import           Database.MSSQL.Internal.Types
 
-import Data.ByteString (ByteString)
+import           Control.Monad
+import           Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Builder as BSB
-import qualified Language.C.Inline as C
-import Foreign.Storable
-import Foreign.C
-import Foreign.Ptr
-import Foreign.ForeignPtr
-import Foreign.Marshal.Alloc (alloca)
-import Data.Vector (Vector)
-import qualified Data.Vector as V
-import Data.Coerce
-import Database.MSSQL.Internal.Ctx
-import Database.MSSQL.Internal.SQLError
-import Data.Text.Foreign as T
+import qualified Data.ByteString.Lazy as LBS
+import           Data.Coerce
+import           Data.Functor.Identity
+import           Data.IORef
+import           Data.Int
+import           Data.Kind
+import           Data.String
 import qualified Data.Text as T
-import Data.IORef
-import Data.Word
-import Data.Int
-import GHC.Generics
-import Data.Time
-import Data.UUID.Types (UUID)
-import Database.MSSQL.Internal.SQLTypes
-import Data.Functor.Identity
-import Control.Monad
-import Data.String
+import           Data.Text.Foreign as T
+import           Data.Time
+import           Data.UUID.Types (UUID)
+import           Data.Vector (Vector)
+import qualified Data.Vector as V
+import           Data.Word
+import           Database.MSSQL.Internal.Ctx
+import           Database.MSSQL.Internal.SQLError
+import           Database.MSSQL.Internal.SQLTypes
+import           Foreign.C
+import           Foreign.ForeignPtr
+import           Foreign.Marshal.Alloc (alloca)
+import           Foreign.Ptr
+import           Foreign.Storable
+import           GHC.Generics
+import qualified Language.C.Inline as C
 #if __GLASGOW_HASKELL__ < 802
-import Data.Semigroup
+import           Data.Semigroup
 #endif
-import Data.Scientific
-import Data.Typeable
-import GHC.TypeLits
-import Data.Char (isAscii)
-import Control.Exception (bracket, onException, finally, throwIO)
+import           Data.Scientific
+import           Data.Typeable
+import           GHC.TypeLits
+import           Data.Char (isAscii)
+import           Control.Exception (bracket, onException, finally, throwIO)
 import qualified Foreign.C.String as F
-import Database.MSSQL.Internal.SQLBindCol
+import           Database.MSSQL.Internal.SQLBindCol
 import qualified Data.Text.Encoding as TE
 
 C.context $ mssqlCtx
@@ -656,7 +657,7 @@ class FromRow t where
                      ) => RowParser t
   fromRow = to <$> gFromRow
 
-class GFromRow (f :: * -> *) where
+class GFromRow (f :: Type -> Type) where
   gFromRow :: RowParser (f a)
 
 instance (GFromRow f) => GFromRow (M1 c i f) where
@@ -683,7 +684,7 @@ type FieldParser t = ColBuffer (FieldBufferType t) -> IO t
 
 class ( SQLBindCol (FieldBufferType t)
       ) => FromField t where
-  type FieldBufferType t :: *
+  type FieldBufferType t :: Type
   fromField :: ColBuffer (FieldBufferType t) -> IO t
 
 instance FromField Int where

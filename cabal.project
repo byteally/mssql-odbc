@@ -5,7 +5,7 @@ packages:
 source-repository-package
     type: git
     location: https://github.com/byteally/haskell-hedgehog.git
-    tag: 6142fce8a2838bbe1abbe740be2656e883a6467d 
+    tag: 297e503f62bb2078b4351e37c12d99a448eb9f8b
     subdir: hedgehog
     
 tests: true
